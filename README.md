@@ -1,4 +1,17 @@
-<p align="center"><img src="assets/brand.jpg" alt="Grandaddy: manage your vibe coding sessions, all in one place" width="720"></p>
+<p align="center">
+  <img src="assets/banner.png" alt="Grandaddy: manage your vibe coding sessions, all in one place" width="820">
+</p>
+
+<p align="center">
+  <b>Multi-session management</b>&nbsp;&nbsp;·&nbsp;&nbsp;<b>Keep your context</b>&nbsp;&nbsp;·&nbsp;&nbsp;<b>Ship more</b>
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square"></a>
+  <img alt="Python 3, no dependencies" src="https://img.shields.io/badge/python%203-no%20dependencies-2b2b2b?style=flat-square">
+  <img alt="Tested on macOS" src="https://img.shields.io/badge/tested%20on-macOS-2b2b2b?style=flat-square">
+  <img alt="Works with Claude Code" src="https://img.shields.io/badge/works%20with-Claude%20Code-2b2b2b?style=flat-square">
+</p>
 
 **grandaddy** is a terminal hub for every coding agent you have running. You can see what
 each session is doing and answer whatever it's waiting on, all from one place. It also lets
@@ -12,32 +25,33 @@ OpenCode sessions.
  ~ | (◠)-(◠) | ~   Manage your vibe coding sessions. All in one place.
     \  ⌒⌒⌒  /
      `-...-'       ● 1 needs you   ● 2 working   ● 1 idle   today 3.1M tokens
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────
- SESSIONS  4                                   │ api-refactor
-  ● api-refactor               working     4m  │ claude  ·  opus-5-5  ·  pid 41822
-› ● docs-site                  needs you   1m  │ ~/code/api  ·  main  ·  3 changed
-  ● nightly-cleanup     bg ◆   working    12m  │ ● working for 4m  ·  context 84k  ·  1.2M tokens  ·  auto-yes off
-  ● codex · web                idle        2h  │ ! docs-site also edited config.ts
-                                               │
-                                               │ ACTIVITY ───────────────────────────────────────────────────────────
-                                               │ 14:02 › fix the flaky login test please
-                                               │         Looking at the login test now.
-                                               │         ▸ Bash      Run the login tests
-                                               │         ✗ Exit code 1: 2 tests failed
-                                               │         ▸ Read ×3   login.ts, auth.ts
-                                               │         ▸ Edit      src/config.ts
-                                               │         The test raced the redirect; it now waits for it.
-───────────────────────────────────────────────────────────────────────────────────────────────────────────────
- [tab] next waiting  [o] jump to it  [a] auto-yes  [s] start new  [h] history  [u] usage  [?] help  [q] quit
+──────────────────────────────────────────────────────────────────────────────────────────
+ SESSIONS  4                        │ api-refactor
+  ● api-refactor   working     4m   │ claude  ·  opus-5-5  ·  pid 41822
+› ● docs-site      needs you   1m   │ ~/code/api  ·  main  ·  3 changed
+  ● nightly   bg ◆ working    12m   │ ● working for 4m  ·  context 84k  ·  1.2M tokens
+  ● codex · web    idle        2h   │ ! docs-site also edited config.ts
+                                    │
+                                    │ ACTIVITY ─────────────────────────────────────────
+                                    │ 14:02 › fix the flaky login test please
+                                    │         Looking at the login test now.
+                                    │         ▸ Bash      Run the login tests
+                                    │         ✗ Exit code 1: 2 tests failed
+                                    │         ▸ Read ×3   login.ts, auth.ts
+                                    │         ▸ Edit      src/config.ts
+                                    │         The test raced the redirect; it waits now.
+──────────────────────────────────────────────────────────────────────────────────────────
+ [tab] next waiting  [o] jump to it  [a] auto-yes  [s] start  [h] history  [?] help
 ```
 
 ## Install
 
 ```sh
 git clone https://github.com/Karang1908/grandaddy.git
-ln -s "$PWD/grandaddy/bin/grandaddy" ~/.local/bin/grandaddy   # anywhere on your PATH
-grandaddy install                                            # once: adds a hook to ~/.claude/settings.json
-grandaddy                                                    # open the hub
+ln -s "$PWD/grandaddy/bin/grandaddy" ~/.local/bin/grandaddy   # or anywhere on your PATH
+
+grandaddy install    # once: adds a hook to ~/.claude/settings.json
+grandaddy            # open the hub
 ```
 
 It needs only Python 3, with no extra packages. It's built and tested on macOS with
@@ -46,6 +60,8 @@ work on Linux, but that hasn't been tested yet. Sessions that are already runnin
 the hook straight away. Installing it doesn't approve anything on its own.
 
 ## What it does
+
+<img src="assets/watching.png" align="right" width="300" alt="Grandaddy watching a list of sessions">
 
 **See everything.** Every running Claude Code session is listed, interactive and background
 alike, plus Codex, Gemini and OpenCode. Each has a status: *working*, *idle*, *needs you*,
@@ -154,4 +170,10 @@ mean the session in the current folder, or the only one that's waiting.
 
 ## License
 
-MIT
+[MIT](LICENSE)
+
+<br>
+<p align="center">
+  <img src="assets/icon.png" width="72" alt="grandaddy icon"><br>
+  <sub>grandaddy keeps an eye on your sessions, so you don't have to.</sub>
+</p>
