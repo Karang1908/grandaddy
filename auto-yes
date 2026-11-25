@@ -1,0 +1,385 @@
+#!/usr/bin/env python3
+"""auto-yes — answer "Yes" to Claude Code permission prompts for the sessions you attach.
+
+How it works: one PermissionRequest hook (installed once into ~/.claude/settings.json)
+runs whenever Claude Code is about to show a "Do you want to proceed?" dialog. If that
+session is attached, the hook answers allow and the dialog never waits on you. Attaching
+is just a flag file, so it takes effect on the next prompt; nothing runs in the background.
+
+  auto-yes                      live view: pick sessions with ↑↓, toggle with space,
+                                watch approvals as they happen (q to quit)
+  auto-yes install              register the hook (once)
+  auto-yes list                 live Claude sessions, * = attached
+  auto-yes attach [target]      target = pid | name | session-id prefix | folder;
+                                no target = the session running in this folder
+  auto-yes attach --all         every session, including ones started later
+  auto-yes detach [target|--all]
+  auto-yes log [n]              last n auto-approvals (default 20)
+  auto-yes uninstall            remove the hook
+"""
+import json, os, sys, time, shutil
+
+HOME = os.path.expanduser("~")
+CLAUDE = os.path.join(HOME, ".claude")
+SETTINGS = os.path.join(CLAUDE, "settings.json")
+SESSIONS = os.path.join(CLAUDE, "sessions")
+STATE = os.path.join(CLAUDE, "auto-yes")
+ATTACHED = os.path.join(STATE, "attached")
+LOG = os.path.join(STATE, "approvals.log")
+ALL = "ALL"
+SELF = os.path.realpath(__file__)
+HOOK_CMD = f'"{SELF}" hook'
+# Tools whose "permission prompt" is really a question for you: allowing them would
+# skip the question rather than say yes to it.
+NEVER_ANSWER = {"AskUserQuestion"}
+
+
+# ---------- hook (runs inside Claude Code; must be fast and never crash the prompt) ----------
+
+def hook():
+    try:
+        d = json.load(sys.stdin)
+    except ValueError:
+        return  # no decision -> normal dialog
+    sid = d.get("session_id") or ""
+    tool = d.get("tool_name") or ""
+    if tool in NEVER_ANSWER or not sid:
+        return
+    if not (os.path.exists(os.path.join(ATTACHED, sid)) or os.path.exists(os.path.join(ATTACHED, ALL))):
+        return
+    ti = d.get("tool_input") or {}
+    what = ti.get("command") or ti.get("file_path") or ti.get("url") or json.dumps(ti)[:200]
+    try:
+        os.makedirs(STATE, exist_ok=True)
+        with open(LOG, "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {sid[:8]}  {tool}: {' '.join(str(what).split())[:300]}\n")
+    except OSError:
+        pass  # logging must never block the approval
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest",
+                                             "decision": {"behavior": "allow"}}}))
+
+
+# ---------- sessions ----------
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def live_sessions():
+    out = []
+    if not os.path.isdir(SESSIONS):
+        return out
+    for fn in os.listdir(SESSIONS):
+        if not fn.endswith(".json"):
+            continue
+        try:
+            s = json.load(open(os.path.join(SESSIONS, fn)))
+        except (OSError, ValueError):
+            continue
+        if s.get("sessionId") and isinstance(s.get("pid"), int) and alive(s["pid"]):
+            out.append(s)
+    return sorted(out, key=lambda s: s.get("startedAt", 0))
+
+
+def attached_ids():
+    try:
+        return set(os.listdir(ATTACHED))
+    except FileNotFoundError:
+        return set()
+
+
+def resolve(target, sessions):
+    """Return the sessions a target names. No target = sessions whose cwd is this folder."""
+    if target is None:
+        here = os.path.realpath(os.getcwd())
+        return [s for s in sessions if os.path.realpath(s.get("cwd", "")) == here]
+    t = target.lower()
+    exact = [s for s in sessions if t in (str(s["pid"]), s["sessionId"].lower(), (s.get("name") or "").lower())]
+    if exact:
+        return exact
+    return [s for s in sessions
+            if s["sessionId"].lower().startswith(t)
+            or t in (s.get("name") or "").lower()
+            or os.path.basename(s.get("cwd", "").rstrip("/")).lower() == t
+            or os.path.realpath(os.path.expanduser(target)) == os.path.realpath(s.get("cwd", ""))]
+
+
+def describe(s, att):
+    mark = "*" if s["sessionId"] in att or ALL in att else " "
+    cwd = s.get("cwd", "").replace(HOME, "~")
+    return f" {mark} pid {s['pid']:<6} {s['sessionId'][:8]}  {(s.get('name') or '-')[:34]:<34}  {cwd}"
+
+
+def prune(ss, att):
+    """Forget flags of sessions that have exited."""
+    for sid in att - {s["sessionId"] for s in ss} - {ALL}:
+        try:
+            os.remove(os.path.join(ATTACHED, sid))
+        except OSError:
+            pass
+
+
+def set_flag(sid, on, payload=""):
+    p = os.path.join(ATTACHED, sid)
+    if on:
+        os.makedirs(ATTACHED, exist_ok=True)
+        open(p, "w").write(payload)
+    else:
+        try:
+            os.remove(p)
+        except FileNotFoundError:
+            pass
+
+
+def cmd_list():
+    att, ss = attached_ids(), live_sessions()
+    hook_ok = hook_installed()
+    if not hook_ok:
+        print("! hook not installed — run: auto-yes install")
+    if ALL in att:
+        print("attached: ALL sessions (--all)")
+    if not ss:
+        print("no live Claude Code sessions")
+    for s in ss:
+        print(describe(s, att))
+    prune(ss, att)
+
+
+# ---------- live terminal UI ----------
+
+def cmd_ui():
+    import curses
+
+    def run(scr):
+        curses.curs_set(0)
+        curses.use_default_colors()
+        for i, c in enumerate((curses.COLOR_GREEN, curses.COLOR_YELLOW, curses.COLOR_RED, curses.COLOR_CYAN), 1):
+            curses.init_pair(i, c, -1)
+        GREEN, YELLOW, RED, CYAN = (curses.color_pair(i) for i in range(1, 5))
+        scr.timeout(1000)  # redraw every second even with no keypress
+        sel, msg = 0, ""
+        opened = time.strftime("%Y-%m-%d %H:%M:%S")
+        while True:
+            ss, att = live_sessions(), attached_ids()
+            prune(ss, att)
+            installed = hook_installed()
+            sel = max(0, min(sel, len(ss) - 1))
+            h, w = scr.getmaxyx()
+            scr.erase()
+
+            def put(y, x, text, attr=0):
+                if 0 <= y < h and x < w:
+                    try:
+                        scr.addnstr(y, x, text, max(0, w - x - 1), attr)
+                    except curses.error:
+                        pass
+
+            put(0, 0, "auto-yes", curses.A_BOLD)
+            put(0, 9, "live · answers Yes to permission prompts in attached sessions", curses.A_DIM)
+            if not installed:
+                put(1, 0, "hook not installed — press i to install", RED | curses.A_BOLD)
+            elif ALL in att:
+                put(1, 0, "ALL sessions attached (a to turn off)", YELLOW | curses.A_BOLD)
+            else:
+                put(1, 0, f"hook installed · {len(att & {s['sessionId'] for s in ss})} of {len(ss)} attached", curses.A_DIM)
+
+            put(3, 0, f"   {'':3} {'PID':<7}{'SESSION':<10}{'NAME':<30}FOLDER", curses.A_DIM)
+            if not ss:
+                put(4, 3, "no live Claude Code sessions", curses.A_DIM)
+            for i, s in enumerate(ss):
+                on = s["sessionId"] in att or ALL in att
+                y = 4 + i
+                if y >= h - 9:
+                    put(y, 3, f"… {len(ss) - i} more (enlarge the window)", curses.A_DIM)
+                    break
+                cwd = s.get("cwd", "").replace(HOME, "~", 1)
+                line = f"{'ON ' if on else 'off'} {s['pid']:<7}{s['sessionId'][:8]:<10}{(s.get('name') or '-')[:28]:<30}{cwd}"
+                attr = (GREEN | curses.A_BOLD) if on else 0
+                if i == sel:
+                    attr |= curses.A_REVERSE
+                put(y, 0, "›" if i == sel else " ", CYAN)
+                put(y, 3, line, attr)
+
+            logy = max(4 + len(ss) + 1, h - 8)
+            put(logy, 0, "recent auto-approvals", curses.A_BOLD)
+            try:
+                lines = open(LOG).read().splitlines()[-(h - logy - 3):]
+            except FileNotFoundError:
+                lines = []
+            if not lines:
+                put(logy + 1, 2, "none yet", curses.A_DIM)
+            for j, l in enumerate(lines):
+                put(logy + 1 + j, 2, l, GREEN if l >= opened else curses.A_DIM)
+
+            put(h - 2, 0, msg, YELLOW)
+            put(h - 1, 0, "↑↓ move   space/enter toggle   a all on/off   i install   q quit", curses.A_DIM)
+            scr.refresh()
+
+            k = scr.getch()
+            if k == -1:
+                continue
+            msg = ""
+            if k == 27:  # arrow keys ncurses didn't decode: ESC [ A/B or ESC O A/B
+                scr.nodelay(True)
+                seq = [scr.getch(), scr.getch()]
+                scr.timeout(1000)
+                k = {ord("A"): curses.KEY_UP, ord("B"): curses.KEY_DOWN}.get(seq[1], -1) \
+                    if seq[0] in (ord("["), ord("O")) else -1
+            if k == ord("q"):
+                return
+            if k in (curses.KEY_UP, ord("k")):
+                sel -= 1
+            elif k in (curses.KEY_DOWN, ord("j")):
+                sel += 1
+            elif k == ord("i"):
+                msg = "hook installed" if add_hook() else "already installed"
+            elif not installed and k in (ord(" "), 10, 13, curses.KEY_ENTER, ord("a")):
+                msg = "install the hook first (i)"
+            elif k == ord("a"):
+                set_flag(ALL, ALL not in att)
+                msg = "ALL sessions attached" if ALL not in att else "ALL turned off"
+            elif k in (ord(" "), 10, 13, curses.KEY_ENTER) and ss:
+                s = ss[sel]
+                on = s["sessionId"] not in att
+                set_flag(s["sessionId"], on, json.dumps(s))
+                msg = ("attached " if on else "detached ") + (s.get("name") or s["sessionId"][:8])
+                if not on and ALL in att:
+                    msg += " (still covered by ALL)"
+
+    try:
+        curses.wrapper(run)
+    except KeyboardInterrupt:
+        pass
+
+
+def pick(args):
+    ss = live_sessions()
+    target = args[0] if args else None
+    m = resolve(target, ss)
+    if len(m) == 1:
+        return m[0]
+    where = f"'{target}'" if target else f"this folder ({os.getcwd()})"
+    print(("no live session matches " if not m else f"{len(m)} sessions match ") + where + ":")
+    for s in (m or ss):
+        print(describe(s, attached_ids()))
+    print("pass a pid or session-id prefix to choose")
+    sys.exit(1)
+
+
+def cmd_attach(args):
+    if not hook_installed():
+        print("hook not installed yet — run: auto-yes install"); sys.exit(1)
+    os.makedirs(ATTACHED, exist_ok=True)
+    if args[:1] == ["--all"]:
+        open(os.path.join(ATTACHED, ALL), "w").close()
+        print("attached to ALL sessions — every permission prompt will be answered Yes")
+        return
+    s = pick(args)
+    open(os.path.join(ATTACHED, s["sessionId"]), "w").write(json.dumps(s))
+    print("attached:" + describe(s, {s["sessionId"]})[2:])
+
+
+def cmd_detach(args):
+    # bare `detach` after `attach --all`, from a folder with no session, means "turn it all off"
+    if args[:1] == ["--all"] or (not args and ALL in attached_ids() and not resolve(None, live_sessions())):
+        shutil.rmtree(ATTACHED, ignore_errors=True)
+        print("detached from everything")
+        return
+    s = pick(args)
+    try:
+        os.remove(os.path.join(ATTACHED, s["sessionId"]))
+        print("detached:" + describe(s, set())[2:])
+    except FileNotFoundError:
+        print("was not attached:" + describe(s, set())[2:])
+    if ALL in attached_ids():
+        print("note: --all is still on, so this session is still auto-approved (auto-yes detach --all)")
+
+
+def cmd_log(args):
+    n = int(args[0]) if args else 20
+    try:
+        lines = open(LOG).read().splitlines()
+    except FileNotFoundError:
+        print("no auto-approvals yet"); return
+    print("\n".join(lines[-n:]))
+
+
+# ---------- install ----------
+
+def load_settings():
+    try:
+        return json.load(open(SETTINGS))
+    except FileNotFoundError:
+        return {}
+
+
+def our_entries(groups):
+    return [g for g in groups if any(h.get("command") == HOOK_CMD for h in g.get("hooks", []))]
+
+
+def hook_installed():
+    return bool(our_entries(load_settings().get("hooks", {}).get("PermissionRequest", [])))
+
+
+def save_settings(d):
+    if os.path.exists(SETTINGS):
+        shutil.copy2(SETTINGS, SETTINGS + ".auto-yes.bak")
+    tmp = SETTINGS + ".auto-yes.tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f, indent=2)
+        f.write("\n")
+    os.replace(tmp, SETTINGS)
+
+
+def add_hook():
+    """Register the hook; False if it was already there."""
+    d = load_settings()
+    groups = d.setdefault("hooks", {}).setdefault("PermissionRequest", [])
+    if our_entries(groups):
+        return False
+    groups.append({"hooks": [{"type": "command", "command": HOOK_CMD, "timeout": 10}]})
+    save_settings(d)
+    return True
+
+
+def cmd_install():
+    if not add_hook():
+        print("already installed"); return
+    print(f"installed PermissionRequest hook in {SETTINGS} (backup: settings.json.auto-yes.bak)")
+    print("running sessions pick it up live; nothing is auto-approved until you `auto-yes attach`")
+
+
+def cmd_uninstall():
+    d = load_settings()
+    groups = d.get("hooks", {}).get("PermissionRequest", [])
+    mine = our_entries(groups)
+    if not mine:
+        print("not installed"); return
+    rest = [g for g in groups if g not in mine]
+    if rest:
+        d["hooks"]["PermissionRequest"] = rest
+    else:
+        del d["hooks"]["PermissionRequest"]
+    save_settings(d)
+    shutil.rmtree(ATTACHED, ignore_errors=True)
+    print("uninstalled; all sessions detached")
+
+
+def main():
+    a = sys.argv[1:]
+    cmd, rest = (a[0], a[1:]) if a else ("ui" if sys.stdout.isatty() and sys.stdin.isatty() else "list", [])
+    {"hook": lambda: hook(), "ui": cmd_ui, "list": cmd_list, "ls": cmd_list,
+     "attach": lambda: cmd_attach(rest), "on": lambda: cmd_attach(rest),
+     "detach": lambda: cmd_detach(rest), "off": lambda: cmd_detach(rest),
+     "log": lambda: cmd_log(rest), "install": cmd_install, "uninstall": cmd_uninstall,
+     }.get(cmd, lambda: print(__doc__.strip()))()
+
+
+if __name__ == "__main__":
+    main()
