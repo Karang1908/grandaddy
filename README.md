@@ -8,16 +8,31 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-2b2b2b?style=flat-square"></a>
-  <img alt="Python 3, no dependencies" src="https://img.shields.io/badge/python%203-no%20dependencies-2b2b2b?style=flat-square">
+  <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-2b2b2b?style=flat-square">
+  <img alt="macOS app built with Tauri" src="https://img.shields.io/badge/app-Tauri-2b2b2b?style=flat-square">
   <img alt="Tested on macOS" src="https://img.shields.io/badge/tested%20on-macOS-2b2b2b?style=flat-square">
   <img alt="Works with Claude Code" src="https://img.shields.io/badge/works%20with-Claude%20Code-2b2b2b?style=flat-square">
 </p>
 
-**grandaddy** is a terminal hub for every coding agent you have running. You can see what
-each session is doing and answer whatever it's waiting on, all from one place. It also lets
-you start sessions, continue old ones, set rules for what gets approved automatically, and
+**grandaddy** keeps an eye on every coding agent you have running. You can see what each
+session is doing and answer whatever it's waiting on, all from one place. It also lets you
+start sessions, continue old ones, set rules for what gets approved automatically, and
 approve from your phone. It works best with Claude Code, and also shows Codex, Gemini and
 OpenCode sessions.
+
+It comes two ways, both built on the same Rust core: a **macOS app**, and a **terminal hub
+and CLI**.
+
+<p align="center">
+  <img src="assets/app-light.png" alt="The Grandaddy app answering a question from a Claude Code session" width="49%">
+  <img src="assets/app-dark.png" alt="The Grandaddy app in dark mode, showing a session's activity timeline" width="49%">
+</p>
+
+The app is styled for macOS 26. The sidebar sits on the system's own translucent material,
+controls float as glass capsules, and it follows your accent colour and light or dark mode.
+Pick a session to see its live timeline; when it needs you, answer from the card at the top.
+
+In a terminal, `grandaddy` opens the same hub:
 
 ```
      _.---._
@@ -46,18 +61,25 @@ OpenCode sessions.
 
 ## Install
 
-```sh
-git clone https://github.com/Karang1908/grandaddy.git
-ln -s "$PWD/grandaddy/bin/grandaddy" ~/.local/bin/grandaddy   # or anywhere on your PATH
+You need Rust (`rustup`). For the app you also need Node, which runs the Tauri CLI.
 
-grandaddy install    # once: adds a hook to ~/.claude/settings.json
-grandaddy            # open the hub
+```sh
+git clone https://github.com/Karang1908/grandaddy.git && cd grandaddy
+
+cargo install --path crates/grandaddy     # the `grandaddy` CLI + terminal hub
+grandaddy install                         # once: adds a hook to ~/.claude/settings.json
+
+cd app && npx @tauri-apps/cli@2 build --bundles app
+cp -R ../target/release/bundle/macos/Grandaddy.app /Applications/
 ```
 
-It needs only Python 3, with no extra packages. It's built and tested on macOS with
-Python 3.14. Jumping to terminals and desktop notifications are macOS-only. The rest should
-work on Linux, but that hasn't been tested yet. Sessions that are already running pick up
-the hook straight away. Installing it doesn't approve anything on its own.
+Sessions that are already running pick up the hook straight away. Installing it doesn't
+approve anything on its own. You can also install the hook from the app, under
+**Settings → Claude Code hook**: the app's own binary can act as the hook, so you don't need
+the CLI for that.
+
+It's built and tested on macOS 26. Jumping to terminals and desktop notifications are
+macOS-only. The CLI should work on Linux too, but that hasn't been tested yet.
 
 ## What it does
 
@@ -155,6 +177,12 @@ mean the session in the current folder, or the only one that's waiting.
   `~/.claude/projects/`. Starting and continuing sessions go through `claude --bg`.
 - **Other tools:** Codex activity is read from `~/.codex/sessions/`. Gemini and OpenCode
   are found from the process list.
+- **Code:**
+  - `crates/grandaddy-core` does all the work: sessions, transcripts, the hook, rules,
+    phone, launching, history and usage.
+  - `crates/grandaddy` is the CLI and the terminal hub (ratatui).
+  - `app/` is the Tauri app: Rust commands in `src-tauri`, plain HTML, CSS and JS in `ui`.
+    Run it with `GRANDADDY_DEBUG=1` to log a self-check of every read command at startup.
 
 ## Limits
 

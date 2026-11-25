@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["crates/grandaddy-core", "crates/grandaddy", "app/src-tauri"]
+
+[workspace.package]
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Karang1908/grandaddy"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
