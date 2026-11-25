@@ -879,8 +879,8 @@ impl Hub {
         }
         c.p(by, bx + 2, &format!(" {MINI} grandaddy — keys "), bold());
         let kw = lines.iter().filter(|(_, v)| v.is_some()).map(|(k, _)| chars(k)).max().unwrap_or(4) as u16 + 4;
-        let mut yy = by + 1;
-        for (k, v) in lines.iter().take(bh.saturating_sub(3) as usize) {
+        for (i, (k, v)) in lines.iter().take(bh.saturating_sub(3) as usize).enumerate() {
+            let yy = by + 1 + i as u16;
             match v {
                 None => {
                     c.p(yy, bx + 3, k, bold().add_modifier(Modifier::DIM));
@@ -892,7 +892,6 @@ impl Hub {
                     c.put(yy, bx + 3 + kw, v, Style::default(), Some((bw - kw - 5) as usize));
                 }
             }
-            yy += 1;
         }
         c.p(by + bh - 2, bx + 3, "any key to close", dim());
     }

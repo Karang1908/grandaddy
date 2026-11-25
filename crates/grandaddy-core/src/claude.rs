@@ -55,7 +55,9 @@ pub fn from_files() -> Vec<Map<String, Value>> {
     out
 }
 
-static AGENTS: Mutex<Option<(f64, Option<Vec<Map<String, Value>>>)>> = Mutex::new(None);
+/// (when fetched, `claude agents --json` result)
+type AgentsCache = Option<(f64, Option<Vec<Map<String, Value>>>)>;
+static AGENTS: Mutex<AgentsCache> = Mutex::new(None);
 
 /// Running sessions, oldest first. `claude agents --json` is the official list (it also has
 /// background sessions); the session files fill in what it lacks (statusUpdatedAt).
@@ -216,7 +218,9 @@ pub struct Activity {
     pub edited: BTreeMap<String, f64>,
 }
 
-static PARSED: Mutex<Option<HashMap<PathBuf, ((f64, u64), Activity)>>> = Mutex::new(None);
+/// transcript -> ((mtime, size) it was parsed at, result)
+type ParseCache = Option<HashMap<PathBuf, ((f64, u64), Activity)>>;
+static PARSED: Mutex<ParseCache> = Mutex::new(None);
 
 /// Recent activity from the transcript tail (cached until the file changes).
 pub fn activity(path: &Path) -> Activity {
@@ -235,7 +239,7 @@ pub fn activity(path: &Path) -> Activity {
             continue;
         }
         let t = d.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        let ts = d.get("timestamp").and_then(|v| parse_ts(v));
+        let ts = d.get("timestamp").and_then(parse_ts);
         let msg = d.get("message").cloned().unwrap_or(Value::Null);
         let content = msg.get("content").cloned().unwrap_or(Value::Null);
         if d.get("isCompactSummary").and_then(|v| v.as_bool()) == Some(true) {

@@ -169,7 +169,9 @@ pub struct Git {
     pub ahead: String,
 }
 
-static GIT: Mutex<Option<HashMap<String, (f64, Option<Git>)>>> = Mutex::new(None);
+/// folder -> (when looked up, summary)
+type GitCache = Option<HashMap<String, (f64, Option<Git>)>>;
+static GIT: Mutex<GitCache> = Mutex::new(None);
 static GIT_BUSY: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 
 fn fetch_git(cwd: &str) -> Option<Git> {

@@ -86,8 +86,8 @@ fn set_auto_all(on: bool) -> Res<()> {
     Ok(())
 }
 
-fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl std::future::Future<Output = Res<T>> {
-    async move { tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string()) }
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Res<T> {
+    tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())
 }
 
 fn outcome((ok, out): (bool, String)) -> Res<String> {
