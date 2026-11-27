@@ -4,6 +4,7 @@
 //! State lives in ~/.grandaddy.
 pub mod awake;
 pub mod claude;
+pub mod commands;
 pub mod config;
 pub mod git;
 pub mod goals;

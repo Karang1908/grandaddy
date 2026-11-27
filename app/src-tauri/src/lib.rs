@@ -4,7 +4,7 @@
 use grandaddy_core::claude::{self, Decision, Past, Tokens};
 use grandaddy_core::sessions::{self, Session};
 use grandaddy_core::util::{self, now};
-use grandaddy_core::{awake, config, git, goals, install, launch, limits, loops, phone, prompt, providers, rules, web};
+use grandaddy_core::{awake, commands, config, git, goals, install, launch, limits, loops, managed, phone, prompt, rules, web};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
@@ -67,6 +67,7 @@ async fn session_detail(key: String) -> Res<Value> {
             "twins": twins,
             "conflicts": conflicts,
             "typable": prompt::typable(s),
+            "control": s.managed.as_ref().and_then(|id| managed::screen(id).ok()).map(|sc| json!({"mode": managed::mode_of(&sc), "effort": managed::effort_of(&sc)})),
         }))
     })
     .await?
@@ -89,10 +90,10 @@ fn answer(rid: String, answers: Map<String, Value>) -> Res<String> {
     Ok(format!("Answered: {}", answers.values().filter_map(|v| v.as_str()).collect::<Vec<_>>().join("; ")))
 }
 
-async fn send_prompt(key: String, text: String, focus: bool) -> Res<Value> {
+async fn send_prompt(key: String, text: String, focus: bool, replace: bool) -> Res<Value> {
     blocking(move || {
         let s = find(&key)?;
-        prompt::send(&s, &text, focus).map(|d| json!(d))
+        prompt::send_with(&s, &text, focus, replace).map(|d| json!(d))
     })
     .await?
 }
@@ -285,38 +286,52 @@ fn rules_remove(n: usize) -> Res<String> {
     rules::remove(n)
 }
 
-async fn agents() -> Res<Vec<Value>> {
-    blocking(|| {
-        let cfg = config::load();
-        install::MCP_TOOLS
-            .iter()
-            .map(|t| {
-                let hookable = install::HOOK_TOOLS.contains(t);
-                json!({
-                    "tool": t, "label": providers::label(t), "detected": install::detected(t),
-                    "hookable": hookable, "hook": hookable && install::hook_installed(t),
-                    "note": install::hook_status(t).note,
-                    "remote": *t == "claude" || cfg.remote.get(*t).copied().unwrap_or(false),
-                    "mcp": install::mcp_installed(t), "mcpSnippet": install::mcp_snippet(t),
-                })
-            })
-            .collect()
+async fn set_hook(on: bool) -> Res<String> {
+    blocking(move || {
+        if on {
+            install::install().map(|r| if r == "already" { "Already connected".to_string() } else { "Connected to Claude Code".into() }).map_err(|e| e.to_string())
+        } else {
+            install::uninstall().map(|_| "Disconnected".to_string()).map_err(|e| e.to_string())
+        }
     })
-    .await
+    .await?
 }
 
-async fn agent_hook(tool: String, on: bool) -> Res<String> {
-    blocking(move || if on { install::install_hook(&tool).map(|r| r.to_string()) } else { install::uninstall_hook(&tool).map(|_| "removed".into()) }).await?
+async fn set_mcp(on: bool) -> Res<String> {
+    blocking(move || if on { install::install_mcp() } else { install::uninstall_mcp().map(|_| "Removed".into()) }).await?
 }
 
-fn agent_remote(tool: String, on: bool) {
-    config::update(|c| {
-        c.remote.insert(tool, on);
-    });
+async fn set_terminal(on: bool) -> Res<String> {
+    blocking(move || if on { install::install_terminal() } else { install::uninstall_terminal() }).await?
 }
 
-async fn agent_mcp(tool: String, on: bool) -> Res<String> {
-    blocking(move || if on { install::install_mcp(&tool) } else { install::uninstall_mcp(&tool).map(|_| "removed".into()) }).await?
+fn managed_id(key: &str) -> Res<String> {
+    let s = find(key)?;
+    s.managed.ok_or_else(|| format!("{} wasn't started through Grandaddy, so it can't be controlled from here", s.name))
+}
+
+/// Switch a session's permission mode (auto, manual, acceptEdits, plan, bypassPermissions).
+async fn session_mode(key: String, mode: String) -> Res<String> {
+    blocking(move || managed::set_mode(&managed_id(&key)?, &mode)).await?
+}
+
+/// Press a key in the session: interrupt (Esc), or shift-tab.
+async fn session_key(key: String, name: String) -> Res<String> {
+    blocking(move || {
+        let id = managed_id(&key)?;
+        let (bytes, done) = match name.as_str() {
+            "interrupt" => ("\x1b", "Interrupted"),
+            "shift-tab" => ("\x1b[Z", "Switched mode"),
+            _ => return Err(format!("unknown key {name}")),
+        };
+        managed::keys(&id, bytes).map(|_| done.to_string())
+    })
+    .await?
+}
+
+/// The slash commands this session understands.
+async fn session_commands(key: String) -> Res<Vec<commands::Command>> {
+    blocking(move || Ok(commands::for_folder(&find(&key)?.cwd))).await?
 }
 
 fn login_agent_path() -> std::path::PathBuf {
@@ -342,7 +357,8 @@ async fn settings() -> Res<Value> {
             "keep": cfg.awake.keep,
             "autoContinue": {"enabled": cfg.auto_continue.enabled, "message": cfg.auto_continue.message},
             "mesh": cfg.experimental_mesh,
-            "remoteTimeout": cfg.remote_timeout,
+            "mcp": install::mcp_installed(),
+            "terminal": install::terminal_installed(),
             "login": login_agent_path().exists(),
             "cli": {"bundled": bundled_cli().is_some(), "linked": util::home().join(".local/bin/grandaddy").symlink_metadata().is_ok()},
             "log": util::log_tail(60),
@@ -570,7 +586,7 @@ pub async fn dispatch(cmd: &str, a: Value) -> Res<Value> {
         "session_detail" => out(session_detail(arg::<String>(&a, "key")?).await),
         "decide" => out(decide(arg::<String>(&a, "rid")?, arg::<bool>(&a, "allow")?)),
         "answer" => out(answer(arg::<String>(&a, "rid")?, arg::<Map<String, Value>>(&a, "answers")?)),
-        "send_prompt" => out(send_prompt(arg::<String>(&a, "key")?, arg::<String>(&a, "text")?, arg::<bool>(&a, "focus")?).await),
+        "send_prompt" => out(send_prompt(arg::<String>(&a, "key")?, arg::<String>(&a, "text")?, arg::<bool>(&a, "focus")?, arg::<Option<bool>>(&a, "replace")?.unwrap_or(false)).await),
         "open_session" => out(open_session(arg::<String>(&a, "key")?).await),
         "set_auto" => out(set_auto(arg::<String>(&a, "sid")?, arg::<bool>(&a, "on")?)),
         "set_auto_all" => out(set_auto_all(arg::<bool>(&a, "on")?)),
@@ -595,13 +611,6 @@ pub async fn dispatch(cmd: &str, a: Value) -> Res<Value> {
         "rules_list" => out(rules_list()),
         "rules_add" => out(rules_add(arg::<String>(&a, "rule")?)),
         "rules_remove" => out(rules_remove(arg::<usize>(&a, "n")?)),
-        "agents" => out(agents().await),
-        "agent_hook" => out(agent_hook(arg::<String>(&a, "tool")?, arg::<bool>(&a, "on")?).await),
-        "agent_remote" => {
-            agent_remote(arg::<String>(&a, "tool")?, arg::<bool>(&a, "on")?);
-            out(())
-        }
-        "agent_mcp" => out(agent_mcp(arg::<String>(&a, "tool")?, arg::<bool>(&a, "on")?).await),
         "settings" => out(settings().await),
         "set_awake" => out(set_awake(arg::<bool>(&a, "enabled")?, arg::<String>(&a, "lid")?).await),
         "set_keep" => {
@@ -633,6 +642,12 @@ pub async fn dispatch(cmd: &str, a: Value) -> Res<Value> {
         "set_login" => out(set_login(arg::<bool>(&a, "on")?)),
         "link_cli" => out(link_cli()),
         "open_url" => out(open_url(arg::<String>(&a, "url")?)),
+        "set_hook" => out(set_hook(arg::<bool>(&a, "on")?).await),
+        "set_mcp" => out(set_mcp(arg::<bool>(&a, "on")?).await),
+        "set_terminal" => out(set_terminal(arg::<bool>(&a, "on")?).await),
+        "session_mode" => out(session_mode(arg::<String>(&a, "key")?, arg::<String>(&a, "mode")?).await),
+        "session_key" => out(session_key(arg::<String>(&a, "key")?, arg::<String>(&a, "name")?).await),
+        "session_commands" => out(session_commands(arg::<String>(&a, "key")?).await),
         _ => Err(format!("unknown command {cmd}")),
     }
 }

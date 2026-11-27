@@ -1,29 +1,33 @@
 use grandaddy_core::claude::{self, Decision, Request};
 use grandaddy_core::sessions::{self, Session};
 use grandaddy_core::util::{self, now};
-use grandaddy_core::{awake, config, git, goals, hook, install, launch, limits, loops, managed, mcp, phone, prompt, providers, rules, web};
+use grandaddy_core::{awake, commands, config, git, goals, hook, install, launch, limits, loops, managed, mcp, phone, prompt, rules, web};
 use serde_json::{Map, Value};
 use std::io::{IsTerminal, Read};
 
-pub const USAGE: &str = "grandaddy — every coding agent on your Mac, in one place.
+pub const USAGE: &str = "grandaddy — every Claude Code session on your Mac, in one place.
 
 See and answer
   grandaddy                       the hub (? shows the keys)
-  grandaddy ls                    sessions across Claude Code, Codex, Antigravity, Cursor, Gemini, OpenCode, Kilo…
+  grandaddy ls                    your Claude Code sessions: terminal, background and the Claude app
   grandaddy watch [session]       follow a session as it works
   grandaddy pending               what's waiting on you
   grandaddy approve | deny [session]
   grandaddy answer [session] 2 1,3 \"my own words\"     one answer per question
 
-Talk to sessions
-  grandaddy run <agent> [args…]   start any agent so grandaddy can type into it later
-  grandaddy send [session] <prompt>                 add --open to bring its window forward
+Control sessions
+  grandaddy terminal on|off       run `claude` in your shell through grandaddy, so every new session is controllable
+  grandaddy run claude [args…]    start one controllable session (what `terminal on` does for you)
+  grandaddy send [session] <prompt or /command>     --open brings its window forward; --replace clears unsent text first
+  grandaddy mode [session] [auto|manual|acceptEdits|plan]   show or switch its permission mode
+  grandaddy interrupt [session]   stop what it's doing (Esc)
+  grandaddy commands [session]    the slash commands it understands, built-in and yours
   grandaddy open [session]        bring its window forward (or attach to a background session)
   grandaddy start <prompt> [--in DIR] [--worktree [NAME]] [--model M]   a background Claude session
   grandaddy stop [session]        stop a background session
 
 Goals and loops
-  grandaddy goal <what you want> [--in DIR] [--agent A] [--model M] [--terminal]
+  grandaddy goal <what you want> [--in DIR] [--model M] [--terminal]
   grandaddy goal ls | rm <id>
   grandaddy loop add <prompt> --every 30m [--session S | --in DIR] [--until TEXT] [--max N]
   grandaddy loop ls | pause <id> | resume <id> | rm <id>
@@ -37,19 +41,16 @@ Git
 Approvals
   grandaddy auto on|off [session|--all]             approve every permission prompt in a session
   grandaddy rules [add <rule> | rm <n>]             yes Bash(npm test*) · ask Bash(git push*) · no Bash(rm -rf*)
-  grandaddy remote on|off <agent>                   hold another agent's prompts for an answer from here
   grandaddy phone setup [server] | test | off       answer on your phone with ntfy
   grandaddy web on|off|url        a page for your phone's browser on this Wi-Fi
 
-Agents and the Mac
-  grandaddy tools                 which agents are connected
-  grandaddy install [agent|all]   connect the approval hook (default: claude)
-  grandaddy uninstall [agent]
-  grandaddy awake on|off | lid off|full|agents     stay awake while sessions work; what a closed lid does
+Setup and the Mac
+  grandaddy install | uninstall   connect Claude Code's approval hook, so prompts and questions come here
+  grandaddy awake on|off | lid off|full|agents     stay awake while sessions are open; what a closed lid does
   grandaddy awake preview         which apps agents-only mode would pause right now
   grandaddy continue on|off [\"message\"]           continue sessions after their usage limit resets
   grandaddy mesh on|off           experimental: let sessions talk to each other (S2S / A2A)
-  grandaddy mcp install <agent|all> | mcp           the MCP server sessions use for that
+  grandaddy mcp install | remove  the MCP server sessions use for that
   grandaddy daemon                loops, auto-continue, staying awake and the phone page, without the app
   grandaddy history [search] · resume <id> [prompt] · usage [days] · log [n]
 
@@ -85,8 +86,7 @@ pub fn main(args: Vec<String>) -> i32 {
         "hook" => {
             let mut input = String::new();
             let _ = std::io::stdin().read_to_string(&mut input);
-            let agent = rest.iter().position(|a| a == "--tool").and_then(|i| rest.get(i + 1)).map(String::as_str);
-            if let Some(out) = hook::run(&input, agent) {
+            if let Some(out) = hook::run(&input) {
                 println!("{out}");
             }
             Ok(())
@@ -127,11 +127,13 @@ pub fn main(args: Vec<String>) -> i32 {
         "usage" => cmd_usage(&rest),
         "phone" => cmd_phone(&rest),
         "web" => cmd_web(&rest),
-        "remote" => cmd_remote(&rest),
         "awake" => cmd_awake(&rest),
         "mesh" => cmd_mesh(&rest),
         "continue" => cmd_continue(&rest),
-        "tools" => cmd_tools(),
+        "terminal" => cmd_terminal(&rest),
+        "mode" => cmd_mode(&rest),
+        "interrupt" => cmd_interrupt(&rest),
+        "commands" => cmd_commands(&rest),
         "daemon" => cmd_daemon(),
         "log" => {
             let n = rest.first().and_then(|s| s.parse().ok()).unwrap_or(20);
@@ -139,8 +141,8 @@ pub fn main(args: Vec<String>) -> i32 {
             println!("{}", if lines.is_empty() { "Nothing logged yet.".into() } else { lines.join("\n") });
             Ok(())
         }
-        "install" => cmd_install(&rest),
-        "uninstall" => cmd_uninstall(&rest),
+        "install" => cmd_install(),
+        "uninstall" => cmd_uninstall(),
         "help" | "-h" | "--help" => {
             println!("{USAGE}");
             Ok(())
@@ -325,11 +327,12 @@ fn opt(args: &mut Vec<String>, name: &str) -> Option<String> {
 fn cmd_send(args: &[String]) -> R {
     let mut a = args.to_vec();
     let focus = opt(&mut a, "--open").is_some();
+    let replace = a.iter().position(|x| x == "--replace").map(|i| a.remove(i)).is_some();
     let sess = sessions::collect();
     let target = (a.len() > 1 && sessions::resolve(Some(&a[0]), &sess, false).len() == 1).then(|| a[0].clone());
     let s = pick(&target.clone().into_iter().collect::<Vec<_>>(), false, false)?;
     let text = if target.is_some() { a[1..].join(" ") } else { a.join(" ") };
-    let d = prompt::send(&s, &text, focus).map_err(Fail)?;
+    let d = prompt::send_with(&s, &text, focus, replace).map_err(|e| Fail(if e.starts_with(managed::UNSENT) { format!("{e}\nSend with --replace to clear it first.") } else { e }))?;
     println!("{}", d.message);
     Ok(())
 }
@@ -469,7 +472,7 @@ fn cmd_goal(args: &[String]) -> R {
                 println!("No goals yet. Start one:  grandaddy goal \"add dark mode to the settings page\"");
             }
             for g in gl {
-                println!("  {}  {:<10} {:<12} {}", g.id, g.status, providers::label(&g.tool), util::one_line(&g.text, 70));
+                println!("  {}  {:<10} {}", g.id, g.status, util::one_line(&g.text, 80));
                 if let Some(s) = g.summary {
                     println!("        {}", util::one_line(&s, 120));
                 }
@@ -482,10 +485,9 @@ fn cmd_goal(args: &[String]) -> R {
         _ => {
             let mut a = args.to_vec();
             let folder = opt(&mut a, "--in").filter(|s| !s.is_empty()).unwrap_or_else(|| std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default());
-            let agent = opt(&mut a, "--agent").filter(|s| !s.is_empty()).unwrap_or_else(|| "claude".into());
             let model = opt(&mut a, "--model").filter(|s| !s.is_empty());
             let terminal = opt(&mut a, "--terminal").is_some();
-            let g = goals::start(&a.join(" "), &folder, &agent, model.as_deref(), terminal).map_err(Fail)?;
+            let g = goals::start(&a.join(" "), &folder, "claude", model.as_deref(), terminal).map_err(Fail)?;
             let where_ = if g.runner == "background" { "in the background — its questions will show up in grandaddy and on your phone" } else { "in a new terminal window" };
             println!("Goal {} started {where_}.", g.id);
             Ok(())
@@ -770,29 +772,6 @@ fn cmd_web(args: &[String]) -> R {
     }
 }
 
-fn cmd_remote(args: &[String]) -> R {
-    let (Some(state), Some(agent)) = (args.first(), args.get(1)) else {
-        let c = config::load();
-        println!("Holding prompts for an answer from grandaddy:");
-        println!("  Claude Code   always (its own dialog stays up too)");
-        for t in ["codex", "antigravity", "cursor", "gemini"] {
-            println!("  {:<13} {}", providers::label(t), if c.remote.get(t).copied().unwrap_or(false) { "on" } else { "off" });
-        }
-        println!("\nOther agents' hooks run before their own prompt appears, so while one waits here its window");
-        println!("shows nothing. After {}s it falls back to its own prompt.  grandaddy remote on|off <agent>", c.remote_timeout);
-        return Ok(());
-    };
-    let on = state == "on";
-    if !["codex", "antigravity", "cursor", "gemini"].contains(&agent.as_str()) {
-        return fail("Remote answering can be turned on for: codex, antigravity, cursor, gemini");
-    }
-    config::update(|c| {
-        c.remote.insert(agent.clone(), on);
-    });
-    println!("{}'s prompts {} wait for an answer from grandaddy.", providers::label(agent), if on { "will now" } else { "won't" });
-    Ok(())
-}
-
 fn cmd_awake(args: &[String]) -> R {
     match (args.first().map(String::as_str), args.get(1).map(String::as_str)) {
         (Some("on"), _) => {
@@ -910,59 +889,78 @@ fn cmd_mesh(args: &[String]) -> R {
 }
 
 fn cmd_mcp(args: &[String]) -> R {
-    let (Some(verb), Some(agent)) = (args.first(), args.get(1)) else { return fail("usage: grandaddy mcp install|remove <agent|all>") };
-    let targets: Vec<&str> = if agent == "all" { install::MCP_TOOLS.iter().copied().filter(|t| install::detected(t)).collect() } else { vec![agent.as_str()] };
-    for t in targets {
-        let r = if verb == "remove" { install::uninstall_mcp(t).map(|_| format!("removed from {}", providers::label(t))) } else { install::install_mcp(t) };
-        match r {
-            Ok(m) => println!("{m}"),
-            Err(e) => println!("{}: {e}", providers::label(t)),
+    match args.first().map(String::as_str) {
+        Some("install") => println!("{}", install::install_mcp().map_err(Fail)?),
+        Some("remove") => {
+            install::uninstall_mcp().map_err(Fail)?;
+            println!("Removed the grandaddy MCP server from Claude Code.");
         }
+        _ => return fail("usage: grandaddy mcp install|remove"),
     }
     Ok(())
 }
 
-fn cmd_tools() -> R {
-    println!("{:<14} {:<10} {:<16} MCP (S2S)", "agent", "on Mac", "approvals");
-    for t in install::MCP_TOOLS {
-        let hook = if install::HOOK_TOOLS.contains(t) {
-            if install::hook_installed(t) { "connected" } else { "not connected" }
-        } else {
-            "—"
-        };
-        println!("{:<14} {:<10} {:<16} {}", providers::label(t), if install::detected(t) { "yes" } else { "no" }, hook, if install::mcp_installed(t) { "added" } else { "—" });
-    }
-    println!("\nConnect approvals:  grandaddy install <agent|all>    Add the MCP server:  grandaddy mcp install <agent|all>");
-    if install::hook_installed("codex") {
-        println!("Codex runs new hooks only after you trust them: open Codex and use /hooks.");
+fn cmd_install() -> R {
+    match install::install().map_err(io)? {
+        "already" => println!("Already connected to Claude Code."),
+        r => println!("Claude Code hook {r}. Prompts and questions now come to grandaddy."),
     }
     Ok(())
 }
 
-fn cmd_install(args: &[String]) -> R {
-    let which = args.first().map(String::as_str).unwrap_or("claude");
-    let targets: Vec<&str> = if which == "all" { install::HOOK_TOOLS.iter().copied().filter(|t| install::detected(t)).collect() } else { vec![which] };
-    for t in targets {
-        match install::install_hook(t) {
-            Ok("already") => println!("{}: already connected", providers::label(t)),
-            Ok(r) => {
-                println!("{}: {r}", providers::label(t));
-                if let Some(n) = install::hook_status(t).note {
-                    println!("  {n}");
-                }
-            }
-            Err(e) => println!("{}: {e}", providers::label(t)),
+fn cmd_uninstall() -> R {
+    if install::uninstall().map_err(io)? { println!("Disconnected from Claude Code.") } else { println!("It wasn't connected.") }
+    Ok(())
+}
+
+fn cmd_terminal(args: &[String]) -> R {
+    match args.first().map(String::as_str) {
+        Some("on") => println!("{}", install::install_terminal().map_err(Fail)?),
+        Some("off") => println!("{}", install::uninstall_terminal().map_err(Fail)?),
+        _ => println!(
+            "Terminal control is {}. With it on, `claude` in your shell runs inside grandaddy, so the app can send its\nsessions messages, slash commands and mode changes.  grandaddy terminal on|off",
+            if install::terminal_installed() { "on" } else { "off" }
+        ),
+    }
+    Ok(())
+}
+
+/// A session grandaddy can type into, or a clear reason it can't.
+fn controllable(args: &[String]) -> Result<(Session, String), Fail> {
+    let s = pick(args, false, false)?;
+    let id = s.managed.clone().ok_or_else(|| Fail(format!("{} wasn't started through grandaddy, so it can't be controlled from here. Turn on terminal control (grandaddy terminal on) and start new sessions with `claude`.", s.name)))?;
+    Ok((s, id))
+}
+
+fn cmd_mode(args: &[String]) -> R {
+    let modes: Vec<&str> = managed::MODES.iter().map(|(m, _)| *m).collect();
+    let (target, rest) = match args.last().map(String::as_str) {
+        Some(m) if modes.contains(&m) => (m.to_string(), &args[..args.len() - 1]),
+        _ => {
+            let (s, id) = controllable(args)?;
+            let screen = managed::screen(&id).map_err(Fail)?;
+            println!("{}: {}{}", s.name, managed::mode_of(&screen).map(managed::label).unwrap_or("mode not shown"), managed::effort_of(&screen).map(|e| format!(" · effort {e}")).unwrap_or_default());
+            println!("Change it with: grandaddy mode [session] {}", modes.join("|"));
+            return Ok(());
         }
-    }
+    };
+    let (_, id) = controllable(rest)?;
+    println!("{}", managed::set_mode(&id, &target).map_err(Fail)?);
     Ok(())
 }
 
-fn cmd_uninstall(args: &[String]) -> R {
-    let which = args.first().map(String::as_str).unwrap_or("claude");
-    match install::uninstall_hook(which) {
-        Ok(true) => println!("Disconnected {}.", providers::label(which)),
-        Ok(false) => println!("{} wasn't connected.", providers::label(which)),
-        Err(e) => return fail(e),
+fn cmd_interrupt(args: &[String]) -> R {
+    let (s, id) = controllable(args)?;
+    managed::keys(&id, "\x1b").map_err(Fail)?;
+    println!("Interrupted {}.", s.name);
+    Ok(())
+}
+
+fn cmd_commands(args: &[String]) -> R {
+    let cwd = if args.is_empty() { std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default() } else { pick(args, false, false)?.cwd };
+    for c in commands::for_folder(&cwd) {
+        let choices = if c.choices.is_empty() { String::new() } else { format!(" <{}>", c.choices.join("|")) };
+        println!("  /{:<28} {:<9} {}", format!("{}{choices}", c.name), c.source, util::one_line(&c.description, 80));
     }
     Ok(())
 }

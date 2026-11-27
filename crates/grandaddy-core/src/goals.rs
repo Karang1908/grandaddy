@@ -40,7 +40,8 @@ fn marker(id: &str) -> String {
 
 /// The instructions the session starts with.
 pub fn prompt(tool: &str, id: &str, text: &str) -> String {
-    let ask = if tool == "claude" { "using the AskUserQuestion tool" } else { "here in the chat, then wait for my answer" };
+    let _ = tool;
+    let ask = "using the AskUserQuestion tool";
     format!(
         "I want you to take on this goal:\n\n{text}\n\n\
          How to work on it:\n\
@@ -52,26 +53,15 @@ pub fn prompt(tool: &str, id: &str, text: &str) -> String {
     )
 }
 
-/// How each agent starts interactively with a first prompt.
-fn command(tool: &str, model: Option<&str>, prompt: &str) -> Result<Vec<String>, String> {
-    let mut cmd: Vec<String> = match tool {
-        "claude" => vec!["claude".into()],
-        "codex" => vec!["codex".into()],
-        "antigravity" => vec!["agy".into(), "-i".into()],
-        "gemini" => vec!["gemini".into(), "-i".into()],
-        "qwen" => vec!["qwen".into(), "-i".into()],
-        "opencode" => vec!["opencode".into(), "--prompt".into()],
-        "kilo" => vec!["kilo".into(), "--prompt".into()],
-        _ => return Err(format!("goals can't start {tool} yet")),
-    };
+/// Claude Code, started interactively with a first prompt.
+fn command(model: Option<&str>, prompt: &str) -> Vec<String> {
+    let mut cmd = vec!["claude".to_string()];
     if let Some(m) = model.filter(|m| !m.is_empty()) {
-        // every supported agent takes --model before the prompt
-        let at = if cmd.len() > 1 { cmd.len() - 1 } else { 1 };
-        cmd.insert(at, m.to_string());
-        cmd.insert(at, "--model".into());
+        cmd.push("--model".into());
+        cmd.push(m.into());
     }
     cmd.push(prompt.to_string());
-    Ok(cmd)
+    cmd
 }
 
 fn shell_quote(s: &str) -> String {
@@ -99,7 +89,7 @@ pub fn start(text: &str, cwd: &str, tool: &str, model: Option<&str>, in_terminal
         }
     } else {
         let cli = crate::install::exe();
-        let line = std::iter::once(cli).chain(std::iter::once("run".to_string())).chain(command(tool, model, &p)?).map(|a| shell_quote(&a)).collect::<Vec<_>>().join(" ");
+        let line = std::iter::once(cli).chain(std::iter::once("run".to_string())).chain(command(model, &p)).map(|a| shell_quote(&a)).collect::<Vec<_>>().join(" ");
         let (ok, out) = launch::open_terminal(&line, Some(&cwd));
         if !ok {
             return Err(out);

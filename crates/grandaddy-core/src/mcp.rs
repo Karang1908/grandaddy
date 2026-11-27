@@ -15,15 +15,14 @@ const VERSIONS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26"];
 
 fn tools() -> Value {
     json!([
-        {"name": "list_sessions", "description": "Coding-agent sessions running on this Mac (Claude Code, Codex, Antigravity, Cursor, Gemini, OpenCode, Kilo…): key, agent, status, folder, model, and whether it accepts prompts.",
+        {"name": "list_sessions", "description": "Claude Code sessions running on this Mac: key, status, folder, model, and whether it accepts prompts.",
          "inputSchema": {"type": "object", "properties": {}}},
         {"name": "read_session", "description": "Recent activity of a session: prompts, replies, tool calls and errors.",
          "inputSchema": {"type": "object", "properties": {"session": {"type": "string", "description": "session key from list_sessions"}, "limit": {"type": "integer", "default": 30}}, "required": ["session"]}},
         {"name": "send_prompt", "description": "Type a prompt into another session (only sessions that accept prompts, e.g. ones started with `grandaddy run`). The message is prefixed with who sent it.",
          "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "text": {"type": "string"}}, "required": ["session", "text"]}},
-        {"name": "start_session", "description": "Start a new session in any supported agent and model to take on a piece of work. Claude Code runs in the background; other agents open in a terminal window.",
+        {"name": "start_session", "description": "Start a new Claude Code session in the background, on any model, to take on a piece of work.",
          "inputSchema": {"type": "object", "properties": {
-             "agent": {"type": "string", "enum": ["claude", "codex", "antigravity", "gemini", "opencode", "kilo"], "default": "claude"},
              "prompt": {"type": "string"}, "folder": {"type": "string", "description": "working folder; defaults to the caller's"},
              "model": {"type": "string", "description": "optional model id for that agent"}}, "required": ["prompt"]}},
         {"name": "wait_for_session", "description": "Wait until a session stops working (or the timeout passes) and return its latest reply.",
@@ -86,19 +85,14 @@ fn call(name: &str, args: &Value) -> Result<String, String> {
             prompt::send(&s, &format!("{from}{}", arg("text")), false).map(|d| d.message)
         }
         "start_session" => {
-            let agent = if arg("agent").is_empty() { "claude".to_string() } else { arg("agent") };
             let folder = if arg("folder").is_empty() { caller().map(|c| c.cwd).unwrap_or_else(|| std::env::current_dir().map(|p| p.display().to_string()).unwrap_or_default()) } else { util::expand(&arg("folder")) };
             let model = Some(arg("model")).filter(|m| !m.is_empty());
             let text = arg("prompt");
             if text.trim().is_empty() {
                 return Err("give the new session a prompt".into());
             }
-            if agent == "claude" {
-                let (ok, out) = launch::new(&folder, &text, None, model.as_deref());
-                return if ok { Ok(format!("{out}\nIt will appear in list_sessions within a few seconds.")) } else { Err(out) };
-            }
-            let g = crate::goals::start(&text, &folder, &agent, model.as_deref(), true).map_err(|e| e.to_string())?;
-            Ok(format!("Opened {} in a terminal window (goal {}). It will appear in list_sessions shortly.", providers::label(&agent), g.id))
+            let (ok, out) = launch::new(&folder, &text, None, model.as_deref());
+            if ok { Ok(format!("{out}\nIt will appear in list_sessions within a few seconds.")) } else { Err(out) }
         }
         "wait_for_session" => {
             let key = arg("session");
@@ -143,7 +137,7 @@ pub fn handle(line: &str) -> Option<String> {
                 "protocolVersion": version,
                 "capabilities": {"tools": {"listChanged": false}},
                 "serverInfo": {"name": "grandaddy", "version": env!("CARGO_PKG_VERSION")},
-                "instructions": "Work with other coding-agent sessions on this Mac: list and read them, prompt the ones that accept prompts, start helpers in any agent and model, and wait for their results."
+                "instructions": "Work with other Claude Code sessions on this Mac: list and read them, prompt the ones that accept prompts, start helpers on any model, and wait for their results."
             }))
         }
         "ping" => Ok(json!({})),

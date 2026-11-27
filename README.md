@@ -13,11 +13,11 @@
   <img alt="Tested on macOS" src="https://img.shields.io/badge/tested%20on-macOS-2b2b2b?style=flat-square">
 </p>
 
-**grandaddy** keeps an eye on every coding agent running on your Mac: Claude Code, Codex,
-Antigravity, Cursor, Gemini CLI, OpenCode, Kilo and more. You can see what each one is doing,
-answer what it's waiting on, and send it its next prompt, all in one place. You can also hand it
-a goal and walk away: it asks what it needs to know, works on its own, and checks with you, here
-or on your phone, before any big decision.
+**grandaddy** runs every Claude Code session on your Mac from one place: in your terminal, in the
+background, or in the Claude app. See what each one is doing, answer what it's waiting on, and
+drive it: send prompts and slash commands, switch its mode, change its model or effort, interrupt
+it. You can also hand it a goal and walk away: it asks what it needs to know, works on its own,
+and checks with you, here or on your phone, before any big decision.
 
 It comes two ways, both built on the same Rust core: a **Mac app** that lives in your menu bar,
 and a **terminal hub and CLI**.
@@ -39,42 +39,51 @@ cp -R target/release/bundle/macos/Grandaddy.app /Applications/
 ```
 
 The `grandaddy` command ships inside the app. **Settings → Command-line tool → Link** puts it on
-your PATH. In **Agents**, switch on approvals for each tool you use.
+your PATH. Then, in **Settings → Claude Code**, switch on **Control sessions from Grandaddy** and
+**Answer prompts and questions here**.
 
 **Just the CLI:**
 
 ```sh
 cargo install --path crates/grandaddy
-grandaddy install all         # connect approvals for every agent it finds
+grandaddy install             # Claude Code's prompts and questions come to grandaddy
+grandaddy terminal on         # `claude` in your shell runs through grandaddy, so you can drive it
 ```
 
 Built and tested on macOS. The build is signed ad hoc, not notarized, so on another Mac you'll
 need to right-click the app and choose Open the first time.
 
-## Works with
+## Control a session
 
-| Agent | Sessions shown | Approvals from grandaddy | How |
-|---|---|---|---|
-| Claude Code (CLI, desktop app) | yes | permissions **and questions** | `PermissionRequest` hook |
-| Codex (CLI, IDE, app) | yes | permissions | `PermissionRequest` hook (trust it once in Codex with `/hooks`) |
-| Antigravity (app, IDE, `agy` CLI) | yes | permissions | `PreToolUse` hook |
-| Cursor (IDE, CLI) | yes | shell and MCP calls | `beforeShellExecution` / `beforeMCPExecution` hooks |
-| Gemini CLI, Qwen Code | yes | permissions (Gemini) | `BeforeTool` hook |
-| OpenCode, Kilo | yes | answer in their own window | no hook API |
-| Aider, Amp, Goose, Crush, Droid, Copilot CLI | while running | answer in their own window | process list |
+Every session you start with `claude` once **terminal control** is on (or with
+`grandaddy run claude`) is fully yours from the app, the CLI, loops and other sessions:
 
-Your rules and auto-yes cover every connected agent. Each hook replies in that agent's own
-format, and anything grandaddy doesn't decide falls through to the agent's usual prompt.
+- **Prompts and slash commands.** Type `/` in the message field for every command the session
+  understands: Claude Code's own (`/compact`, `/btw`, `/goal`, `/review`, `/context`…) and your
+  skills and commands from `~/.claude` and the project. Arrow keys and Tab pick one.
+- **Mode.** Auto, Manual, Accept edits or Plan, switched the way you would: Shift+Tab, checked
+  against what the session shows until it's right.
+- **Model and effort.** `/model` and `/effort`, one click each. Claude Code keeps an effort change
+  as that model's default for new sessions.
+- **Interrupt.** Esc, from a button.
+- **Never typed over.** If the session's input box already has text (a draft, or the prompt Claude
+  puts back after you interrupt it), grandaddy asks before replacing it.
+
+It looks and feels exactly like `claude`: your keyboard passes straight through, and closing the
+window ends the session as it always did. `claude -p`, pipes and subcommands like `claude mcp` run
+untouched. Sessions started before you turned it on, and ones in the Claude app, can still be
+watched and answered; a message to one of those is copied and its window brought forward (iTerm,
+Terminal and tmux sessions take it directly).
 
 ## What it does
 
-**See everything.** Every session from every agent above, grouped by what it needs from you:
+**See everything.** Every Claude Code session, grouped by what it needs from you:
 *Needs You*, *Working*, *Idle*. Pick one to see its activity as a conversation (your prompts,
 its replies, the steps in between) with model, folder, branch and context size above it.
 Long runs of steps fold up so the words stay readable. grandaddy warns you when a session goes
 quiet, seems stuck in a loop, or edits a file another session is also editing.
 
-**Answer from anywhere.** When an agent asks a question, wants permission, or ends its turn by
+**Answer from anywhere.** When a session asks a question, wants permission, or ends its turn by
 asking you something, a popup appears at the top right of your screen, over whatever you're
 doing, without taking the keyboard from you. Answer, allow, deny or reply right there, or choose
 **Later**. In the sidebar, every session waiting on you is tinted yellow. Questions arrive with
@@ -82,22 +91,10 @@ their options and room to answer in your own words. Permission prompts get **All
 bar, in the terminal hub, on your phone, or in the session itself. Whichever answer comes
 first wins.
 
-**Send prompts.** Each session has a message field, and the hub has `p`. To make sure your words
-land in the session, start agents through grandaddy:
-
-```sh
-grandaddy run claude          # or: codex, agy, gemini, opencode, kilo, aider…
-```
-
-It looks and feels exactly as usual, but now grandaddy, loops and other sessions can type into
-it, and **Open** brings its window forward. Sessions in iTerm, Terminal or tmux take prompts
-too. For anything else, the prompt is copied and the window brought forward so you can paste it.
-
-**Goals.** Describe an outcome ("add CSV export to the reports page, with tests"), pick a folder,
-an agent and a model. The session asks its questions first, then works on its own, and stops to
+**Goals.** Describe an outcome ("add CSV export to the reports page, with tests"), pick a folder
+and a model. The session asks its questions first, then works on its own, and stops to
 ask before major decisions: changing scope, choosing between real alternatives, anything
-destructive or that costs money. With Claude Code those questions come to grandaddy and your
-phone. Goals track their session and show a summary when it's done.
+destructive or that costs money. Those questions come to grandaddy and your phone. Goals track their session and show a summary when it's done.
 
 **Loops.** A prompt on a schedule, sent to a session or to a fresh background session each
 time. "Check CI and fix what's red, every 30 minutes." A loop waits while its session is busy,
@@ -117,14 +114,15 @@ and can stop itself once the reply contains a phrase you choose, or after a numb
 
 Merging asks first. Nothing ever force-pushes or force-deletes.
 
-**Everything sleeps except the coding.** While your agents need the Mac (a session working,
-waiting on you, due to continue after a usage limit, or a loop due within the hour), grandaddy
-keeps it from idle-sleeping, and lets go ten minutes after the last of those ends. The display still sleeps and locks. Once everything is idle, it lets go.
-You also choose what closing the lid does while your agents need the Mac:
+**Everything sleeps except the coding.** While a session is working or waiting on you, is due to
+continue after a usage limit, or a loop is due within the hour, grandaddy keeps the Mac from
+idle-sleeping, and lets go ten minutes after the last of those ends. The display still sleeps.
+You also choose what closing the lid does:
 
 - **Sleep:** as usual.
-- **Keep everything on:** the whole Mac keeps running.
-- **Agents only:** your agents keep running and everything else rests. The display turns off,
+- **Keep everything on:** while any Claude session is open, the whole Mac keeps running, display
+  included, so nothing locks.
+- **Agents only:** while any Claude session is open, it keeps running and everything else rests. The display turns off,
   every app that isn't running a session is paused (browsers, terminals and call apps stay on a
   keep list you can edit), sound is muted and Low Power Mode turns on. Opening the lid undoes all
   of it. `grandaddy awake preview` shows which apps would pause right now.
@@ -132,7 +130,8 @@ You also choose what closing the lid does while your agents need the Mac:
 Both lid modes need your password once, for a rule that allows exactly
 `pmset -a disablesleep 0|1` and `pmset -b lowpowermode 0|1`. Every change is written down before
 it's made, so if grandaddy crashes, the next start, or a watchdog the moment it dies, resumes
-paused apps and puts sleep back.
+paused apps and puts sleep back. A restarting grandaddy takes those records over, so the old
+one's watchdog leaves the new one's hold alone, and the hold is re-checked every few seconds.
 
 **Continue after usage limits.** When a session stops on its 5-hour or weekly limit, grandaddy
 shows when the limit resets, and with **Continue after a usage limit resets** on, it sends the
@@ -154,8 +153,7 @@ there, and **Open at login** starts it there.
 - **The phone page**: on the same Wi-Fi, scan the QR code in Settings. You can answer questions,
   follow goals and message sessions from your phone's browser. The link carries a private key.
 
-**Rules.** Finer control than auto-yes, in Claude Code's `Tool(pattern)` syntax. They apply to
-every connected agent, because shell commands from all of them are matched as `Bash`:
+**Rules.** Finer control than auto-yes, in Claude Code's `Tool(pattern)` syntax:
 
 ```sh
 grandaddy rules add yes "Bash(npm test*)"    # approve automatically
@@ -165,11 +163,11 @@ grandaddy rules add no  "Bash(rm -rf /*)"    # refuse
 
 Questions are never answered by a rule or by auto-yes.
 
-**Experimental: sessions that talk to each other.** Turn it on in **Agents → Experimental** (or
-`grandaddy mesh on`) to add the grandaddy MCP server to your agents. A session can then list and
-read other sessions, message the ones started with `grandaddy run`, and start helpers in any
-agent and model, waiting for their results. A planner on one model can hand work to sessions on
-others.
+**Experimental: sessions that talk to each other.** Turn it on in **Settings → Experimental**
+(or `grandaddy mesh on` and `grandaddy mcp install`) to add the grandaddy MCP server to Claude
+Code. A session can then list and read other sessions, message the controllable ones, and start
+helpers on any model, waiting for their results. A planner on one model can hand work to
+sessions on others.
 
 ## The terminal hub
 
@@ -185,7 +183,7 @@ others.
  SESSIONS  4                        │ Fix flaky login test
   ● Fix flaky login test  working   │ Claude Code  ·  opus-5-5  ·  pid 41822
 › ● Reports CSV export  needs you   │ ~/code/api  ·  fix/flaky-login  ·  3 changed
-  ● Release pipeline · Codex  idle  │ ● working for 4m  ·  context 84k
+  ● Release pipeline  idle         │ ● working for 4m  ·  context 84k
 ```
 
 | key | does |
@@ -206,23 +204,25 @@ others.
 grandaddy ls | watch [session] | pending
 grandaddy approve | deny [session]
 grandaddy answer [session] 2 1,3 "my own words"
-grandaddy run <agent> [args…]                    start an agent grandaddy can type into
-grandaddy send [session] <prompt> [--open]
+grandaddy terminal on|off                        `claude` in your shell runs through grandaddy
+grandaddy run claude [args…]                     one session grandaddy can control
+grandaddy send [session] <prompt or /command> [--open] [--replace]
+grandaddy mode [session] [auto|manual|acceptEdits|plan]
+grandaddy interrupt [session] · commands [session]
 grandaddy open | stop [session]
 grandaddy start <prompt> [--in DIR] [--worktree [NAME]] [--model M]
-grandaddy goal <what you want> [--in DIR] [--agent A] [--model M] [--terminal] · goal ls | rm
+grandaddy goal <what you want> [--in DIR] [--model M] [--terminal] · goal ls | rm
 grandaddy loop add <prompt> --every 30m [--session S | --in DIR] [--until TEXT] [--max N]
 grandaddy loop ls | pause | resume | rm <id>
 grandaddy git [session] · git log | branches | prs
 grandaddy git commit <message> | push | pull | branch <name> | switch <name>
 grandaddy git pr <title> [--draft] · git merge <number> [--squash|--merge|--rebase] [--delete-branch]
 grandaddy auto on|off [session|--all] · rules [add <rule> | rm <n>]
-grandaddy remote on|off <agent>                  hold another agent's prompts for your answer
-grandaddy tools · install [agent|all] · uninstall [agent]
+grandaddy install | uninstall                    Claude Code's approval hook
 grandaddy awake on|off · awake lid off|full|agents · awake preview
 grandaddy continue on|off ["message"] · continue skip|unskip [session]
 grandaddy phone setup [server] | test | off · web on|off|url
-grandaddy mesh on|off · mcp install <agent|all>  (experimental)
+grandaddy mesh on|off · mcp install | remove     (experimental)
 grandaddy daemon                                 loops, staying awake and the phone page, without the app
 grandaddy history [search] · resume <id> [prompt] · usage [days] · log [n]
 ```
@@ -232,26 +232,25 @@ session in the current folder, or the only one that's waiting.
 
 ## How it works
 
-- **Sessions.** Claude Code comes from `claude agents --json` and its transcripts. Everything
-  else is read, read-only, from where each tool keeps it: Codex rollouts in `~/.codex/sessions`,
-  Antigravity transcripts in `~/.gemini/antigravity*/brain`, Gemini and Qwen chats in
-  `~/.gemini/tmp` and `~/.qwen/tmp`, OpenCode and Kilo SQLite in `~/.local/share`, Cursor's chat
-  store, and the Claude desktop app's session records. Terminal sessions are listed only while
-  their process is running.
-- **Answering.** Each agent runs `grandaddy hook --tool <agent>` before it acts. The hook checks
-  your rules and auto-yes. If neither decides, it either holds the request in
-  `~/.grandaddy/pending/` for an answer from grandaddy or your phone (always for Claude Code,
-  whose own dialog stays up meanwhile; for other agents only with `grandaddy remote on`, for up
-  to two minutes), or hands it straight back to the agent's own prompt. Installing a hook keeps
-  the rest of that config file and writes a `.grandaddy.bak` copy first.
+- **Sessions.** From `claude agents --json`, the transcripts in `~/.claude/projects`, and the
+  Claude desktop app's session records.
+- **Answering.** Claude Code runs `grandaddy hook` before it shows a permission dialog or asks a
+  question. The hook checks your rules and auto-yes; if neither decides, it holds the request in
+  `~/.grandaddy/pending/` for an answer from grandaddy or your phone while Claude's own dialog
+  stays up, and whichever is answered first wins. Installing the hook keeps the rest of
+  `~/.claude/settings.json` and writes a `.grandaddy.bak` copy first.
 - **Usage limits.** A session's transcript records each limit stop with its exact reset time
   (`quotaLimits.resetsAt`). Auto-continue acts once per limit, 90 seconds after it lifts, and only
   in sessions it can type into or resume.
-- **Typing into sessions.** `grandaddy run` starts the agent inside a terminal it owns and passes
-  your keyboard through untouched. Prompts sent by grandaddy arrive as a paste, then Return.
+- **Controlling sessions.** `grandaddy run` starts `claude` inside a terminal it owns, passes your
+  keyboard through untouched, and keeps a copy of the screen (a vt100 emulator). That copy is how
+  it reads the mode, the effort and what's in the input box, and how it checks that a message was
+  submitted. Messages arrive as a paste, slash commands as typing, then Return. Terminal control is
+  a short `claude` function in `~/.zshrc` (and `~/.bashrc` if you have one), between marker
+  comments, removed by `grandaddy terminal off`.
 - **Code.**
-  - `crates/grandaddy-core` does the work: providers, hook, rules, goals, loops, git, staying
-    awake, the phone page and the MCP server.
+  - `crates/grandaddy-core` does the work: sessions, hook, session control, commands, rules,
+    goals, loops, git, staying awake, the phone page and the MCP server.
   - `crates/grandaddy` is the CLI and the terminal hub (ratatui).
   - `app/` is the Tauri app: Rust commands in `src-tauri`, plain HTML, CSS and JS in `ui`.
     Loops, staying awake and the phone page run inside the app, or under `grandaddy daemon`,
@@ -259,16 +258,15 @@ session in the current folder, or the only one that's waiting.
 
 ## Limits
 
-- Only Claude Code's questions can be answered from grandaddy. Other agents' permission prompts
-  can be, but their questions are answered in their own window.
-- Codex runs a new hook only after you trust it in Codex (`/hooks`).
-- Cursor documents its hooks for the IDE. The Cursor CLI may not run them.
-- Antigravity and Gemini don't record a session's folder, so grandaddy learns it the first time
-  their hook runs.
-- Typing straight into a session needs `grandaddy run`, iTerm, Terminal or tmux. Elsewhere the
-  prompt goes to your clipboard, and auto-continue sends you a notification instead.
-- Codex limits are read from the wording of its message, which grandaddy has only seen in
-  documentation, not on a real session.
+- Claude Code only, for now.
+- Driving a session (mode, model, effort, commands, interrupt, input-box checks) needs it to have
+  started under grandaddy: with terminal control on, or `grandaddy run claude`. Others take
+  messages through iTerm, Terminal or tmux, or from your clipboard, and auto-continue sends you a
+  notification instead.
+- Mode and effort are read from Claude Code's footer, so a future change to its wording needs a
+  grandaddy update. The effort is shown only while Claude Code shows it.
+- Commands that open a menu in the session (`/rewind`, `/mcp`, `/config`…) are best finished in its
+  own window.
 - Pull requests need GitHub and the `gh` command, signed in.
 - The phone page is plain HTTP on your local network. Use it on networks you trust.
 

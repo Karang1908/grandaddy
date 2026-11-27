@@ -2,17 +2,10 @@
 //! is fine; unknown fields are kept when saving.
 use crate::util;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
-    /// Tools (other than Claude Code) whose permission prompts wait for an answer from
-    /// grandaddy or your phone. Off by default: their hooks run before their own prompt, so
-    /// waiting means their window shows nothing until you answer here.
-    pub remote: BTreeMap<String, bool>,
-    /// How long such a prompt waits before falling back to the tool's own prompt.
-    pub remote_timeout: u64,
     pub awake: Awake,
     pub web: Web,
     /// S2S / A2A: lets sessions talk to each other through the grandaddy MCP server.
@@ -73,11 +66,6 @@ pub struct Web {
     pub token: String,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Config { remote: BTreeMap::new(), remote_timeout: 120, awake: Awake::default(), web: Web::default(), experimental_mesh: false, auto_continue: AutoContinue::default() }
-    }
-}
 impl Default for Awake {
     fn default() -> Self {
         Awake { enabled: true, lid: String::new(), lid_closed: false, keep: DEFAULT_KEEP.iter().map(|s| s.to_string()).collect() }
@@ -121,6 +109,3 @@ pub fn update(f: impl FnOnce(&mut Config)) -> Config {
     c
 }
 
-pub fn remote_for(tool: &str) -> bool {
-    tool == "claude" || load().remote.get(tool).copied().unwrap_or(false)
-}

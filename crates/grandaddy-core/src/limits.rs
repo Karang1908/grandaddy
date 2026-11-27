@@ -151,7 +151,7 @@ pub fn set_skip(key: &str, skip: bool) {
 
 /// The session's current limit stop, if it has one.
 pub fn of(s: &Session) -> Option<Limit> {
-    if !matches!(s.tool.as_str(), "claude" | "codex") || s.status == "working" {
+    if s.status == "working" {
         return None;
     }
     sessions::activity(s).limit

@@ -60,6 +60,11 @@ pub fn typable(s: &Session) -> bool {
 
 /// Send `text` to the session. `focus` also brings its window forward.
 pub fn send(s: &Session, text: &str, focus: bool) -> Result<Delivery, String> {
+    send_with(s, text, focus, false)
+}
+
+/// [`send`], replacing whatever is already typed in a managed session's input box if `replace`.
+pub fn send_with(s: &Session, text: &str, focus: bool, replace: bool) -> Result<Delivery, String> {
     if text.trim().is_empty() {
         return Err("type a prompt first".into());
     }
@@ -70,7 +75,7 @@ pub fn send(s: &Session, text: &str, focus: bool) -> Result<Delivery, String> {
         Ok(Delivery { how: "typed".into(), message: msg })
     };
     if let Some(id) = &s.managed {
-        managed::send(id, text, true)?;
+        managed::send(id, text, true, replace)?;
         return typed(format!("Sent to {}", s.name));
     }
     if let Some(pid) = s.pid {
@@ -135,13 +140,8 @@ pub fn open(s: &Session) -> Result<String, String> {
         let (ok, msg) = launch::jump(pid);
         return if ok { Ok(msg) } else { Err(msg) };
     }
-    let app = match (s.tool.as_str(), s.surface.as_str()) {
-        ("cursor", _) => "Cursor",
-        ("antigravity", "IDE") => "Antigravity IDE",
-        ("antigravity", "app") => "Antigravity",
-        ("codex", "IDE") => "Visual Studio Code",
-        ("codex", "app") => "Codex",
-        ("claude", "app") => "Claude",
+    let app = match s.surface.as_str() {
+        "app" => "Claude",
         _ => return Err(format!("{} isn't running in a window grandaddy can find", s.name)),
     };
     let ok = Command::new("open").args(["-a", app]).status().map(|s| s.success()).unwrap_or(false);

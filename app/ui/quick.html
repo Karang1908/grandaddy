@@ -35,6 +35,7 @@
     footer { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--line); background: var(--side); }
     footer .awake { flex: 1; font-size: 11.5px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     footer .awake svg { width: 12px; height: 12px; flex: none; }
+    footer .awake span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .skel-row { height: 40px; margin: 8px 0; border-radius: 8px; }
   </style>
 </head>
@@ -91,11 +92,11 @@
       h += `<div class="sect">Needs You</div>`;
       for (const s of waiting.filter((x) => !(x.pending || []).length)) {
         const lastLine = s.question.text.trim().split("\n").filter((l) => l.trim()).pop() || "";
-        h += `<div class="req"><div class="who">${glyph("needs you")}${esc(s.name)}<span class="agent">${esc(s.tool_label)}</span></div><div class="q">${esc(lastLine.replace(/[*_`]/g, ""))}</div><div class="row"><button class="btn default small" data-go="${esc(s.key)}">Reply…</button></div></div>`;
+        h += `<div class="req"><div class="who">${glyph("needs you")}${esc(s.name)}</div><div class="q">${esc(lastLine.replace(/[*_`]/g, ""))}</div><div class="row"><button class="btn default small" data-go="${esc(s.key)}">Reply…</button></div></div>`;
       }
       for (const s of waiting) for (const r of s.pending || []) {
         const q = r.tool === "AskUserQuestion";
-        h += `<div class="req"><div class="who">${glyph("needs you")}${esc(s.name)}<span class="agent">${esc(s.tool_label)}</span></div>` +
+        h += `<div class="req"><div class="who">${glyph("needs you")}${esc(s.name)}</div>` +
           (q ? `<div class="q">${esc((r.input.questions || [])[0]?.question || "A question")}</div><div class="row"><button class="btn default small" data-go="${esc(s.key)}">Answer…</button></div>`
              : `<code>${esc(summary(r))}</code><div class="row"><button class="btn small" data-deny="${esc(r.id)}">Deny</button><button class="btn default small" data-allow="${esc(r.id)}">Allow</button></div>`) +
           `</div>`;
@@ -105,14 +106,14 @@
     if (rest.length) {
       h += `<div class="sect">Sessions</div>`;
       for (const s of rest) {
-        const agent = s.tool === "claude" && s.surface === "CLI" ? "" : s.tool_label;
+        const agent = s.surface === "app" ? "Claude app" : "";
         const meta = s.status === "limit" && s.limit && s.limit.resets_at ? `Resets ${clock(s.limit.resets_at)}` : [agent, s.status, s.folder].filter(Boolean).join(" · ");
         h += `<button class="s-row ${openKey === s.key ? "open" : ""}" data-key="${esc(s.key)}">${glyph(s.status)}
           <span class="n">${esc(s.name)}</span><span class="w">${esc(s.ago)}</span><span class="m">${esc(meta)}</span></button>`;
         if (openKey === s.key) h += `<form class="inline" data-send="${esc(s.key)}"><input placeholder="Message ${esc(s.name)}" value="${esc(draft)}"><button class="btn small" type="button" data-go="${esc(s.key)}">Open</button></form>`;
       }
     }
-    if (!sessions.length) h = `<div class="none">Start Claude Code, Codex, Antigravity, Cursor, Gemini or OpenCode anywhere and it appears here.</div>`;
+    if (!sessions.length) h = `<div class="none">Start Claude Code anywhere and it appears here.</div>`;
     if (h !== last) { $("#list").innerHTML = h; last = h; }
   }
 
@@ -122,8 +123,11 @@
     try {
       const st = await invoke("settings");
       const a = st.awake || {};
-      const text = !a.enabled ? "" : a.agents_only_active ? `Lid closed · agents only · ${a.frozen.length} apps paused` : a.holding ? `Awake${a.lid_active ? ", even with the lid closed" : ""}: ${(a.reasons || [])[0] || "agents need it"}` : "";
+      const why = (a.reasons || [])[0] || "Claude needs it";
+      const text = !a.enabled ? "" : a.agents_only_active ? `Lid closed · ${a.frozen.length} apps paused` : a.holding ? `Awake: ${why}` : "";
+      const full = a.agents_only_active ? `Lid closed, agents only: ${a.frozen.length} apps paused` : `Awake${a.lid_active ? ", even with the lid closed" : ""}: ${(a.reasons || []).join(", ") || why}`;
       $("#awake").innerHTML = text ? `${G.moon}<span>${esc(text)}</span>` : "";
+      $("#awake").title = text ? full : "";
     } catch {}
   }
   window.quick = { refresh: () => { last = ""; openKey = null; refresh(); } };

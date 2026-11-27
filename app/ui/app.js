@@ -48,11 +48,10 @@ const countdown = (secs) => {
 const limitLabel = (k) => ({ five_hour: "5-hour limit", seven_day: "weekly limit", session: "session limit" }[k] || "usage limit");
 
 const GROUPS = [["needs you", "Needs You"], ["working", "Working"], ["limit", "Paused by Limits"], ["idle", "Idle"], ["running", "Running"], ["blocked", "Can't Run"], ["failed", "Failed"]];
-const AGENTS = [["claude", "Claude Code"], ["codex", "Codex"], ["antigravity", "Antigravity"], ["gemini", "Gemini CLI"], ["opencode", "OpenCode"], ["kilo", "Kilo"]];
 
 const S = {
   sessions: [], sel: null, view: "sessions", tab: "activity", detail: null, filter: "",
-  drafts: {}, form: {}, ans: {}, open: {},
+  drafts: {}, form: {}, ans: {}, open: {}, cmds: {}, pal: { open: false, i: 0, items: [] }, menu: null,
   git: null, gitCwd: null, diff: null, diffPath: null,
   goals: null, loops: null, hist: null, histSel: null, histAct: [], usage: null, agents: null, rules: null, settings: null,
   lastPane: "", busy: false, ticks: 0, booted: false,
@@ -165,6 +164,12 @@ async function refreshSessions() {
     S.sel = (by("needs you") || S.sessions.find((s) => s.question) || by("working") || by("limit") || by("idle") || S.sessions[0]).key;
   }
 }
+/** The slash commands for a session, fetched once per session. */
+async function loadCommands(s) {
+  if (!s || S.cmds[s.key]) return;
+  S.cmds[s.key] = [];
+  try { S.cmds[s.key] = await poll("session_commands", { key: s.key }); } catch {}
+}
 async function refreshDetail() {
   if (S.view !== "sessions" || !S.sel) return (S.detail = null);
   try {
@@ -182,7 +187,6 @@ async function refreshView(force = false) {
     if (v === "loops" && every(2)) S.loops = await get("loops_list");
     if (v === "history" && (force || !S.hist)) S.hist = await get("history");
     if (v === "usage" && (force || !S.usage)) S.usage = await get("usage", { days: 7 });
-    if (v === "agents" && (force || !S.agents)) { S.agents = await get("agents"); S.settings = await get("settings"); }
     if (v === "rules" && (force || !S.rules)) S.rules = await get("rules_list");
     if ((v === "settings" && every(3)) || (v === "sessions" && every(10))) S.settings = await get("settings");
     if (v === "sessions" && S.tab === "git" && S.detail && (force || S.gitCwd !== S.detail.session.cwd)) await loadGit();
@@ -225,8 +229,7 @@ function render() {
 async function boot() {
   const steps = [
     ["Finding your sessions…", async () => { await refreshSessions(); await refreshDetail(); }],
-    ["Reading settings…", async () => { S.settings = await poll("settings").catch(() => null); }],
-    ["Checking your agents…", async () => { S.agents = await poll("agents").catch(() => null); }],
+    ["Reading settings…", async () => { S.settings = await poll("settings").catch(() => null); await loadCommands(selected()); }],
   ];
   const bar = $("#splash-bar");
   for (let i = 0; i < steps.length; i++) {
@@ -239,7 +242,7 @@ async function boot() {
   S.booted = true;
   render();
   // GRANDADDY_DEBUG=1: report what loaded, so a build can be checked without looking at it
-  raw("debug").then((on) => on && raw("ui_log", { level: "info", msg: `main window: ${S.sessions.length} sessions, settings ${S.settings ? "ok" : "MISSING"}, agents ${S.agents ? S.agents.length : "MISSING"}, selected ${S.sel || "none"}, markdown ${typeof window.markdown}` })).catch(() => {});
+  raw("debug").then((on) => on && raw("ui_log", { level: "info", msg: `main window: ${S.sessions.length} sessions, settings ${S.settings ? "ok" : "MISSING"}, selected ${S.sel || "none"}, markdown ${typeof window.markdown}` })).catch(() => {});
   setTimeout(() => $("#splash").classList.add("done"), 260);
   setTimeout(() => $("#splash")?.remove(), 900);
 }
@@ -264,7 +267,7 @@ function renderSidebar() {
   $$(".row-btn").forEach((b) => b.classList.toggle("sel", b.dataset.view === S.view));
 }
 function srow(s) {
-  const agent = s.tool === "claude" && s.surface === "CLI" ? "" : s.surface === "CLI" ? s.tool_label : `${s.tool_label} ${s.surface}`;
+  const agent = s.surface === "app" ? "Claude app" : "";
   let meta = [agent, s.folder].filter(Boolean).join(" · ");
   if (s.status === "limit" && s.limit && s.limit.resets_at) meta = `Resets ${when(s.limit.resets_at)}${agent ? " · " + agent : ""}`;
   if (s.question && s.status === "idle") meta = `Waiting for your reply${agent ? " · " + agent : ""}`;
@@ -283,7 +286,7 @@ function renderToolbar() {
   if (s) {
     const st = s.question && s.status === "idle" ? "waiting for your reply" : { "needs you": "needs you", limit: "paused by a usage limit" }[s.status] || s.status;
     title = s.name;
-    sub = [s.tool_label + (s.surface !== "CLI" ? ` ${s.surface}` : ""), st].join(" · ");
+    sub = [s.surface === "app" ? "Claude app" : s.bg ? "Background" : s.managed ? "Terminal · controllable" : "Terminal", st].join(" · ");
   } else if (S.view === "sessions") title = "Grandaddy";
   $("#title").textContent = title;
   $("#subtitle").textContent = sub;
@@ -315,7 +318,7 @@ function renderPane() {
   const a = document.activeElement;
   // never redraw under someone typing (an answer, a commit message, a goal)
   if (pane.contains(a) && a.matches("input:not([type=checkbox]), textarea, select")) return;
-  const views = { sessions: sessionPane, goals: goalsPane, loops: loopsPane, history: historyPane, usage: usagePane, agents: agentsPane, rules: rulesPane, settings: settingsPane };
+  const views = { sessions: sessionPane, goals: goalsPane, loops: loopsPane, history: historyPane, usage: usagePane, rules: rulesPane, settings: settingsPane };
   const html = (views[S.view] || sessionPane)();
   if (html === S.lastPane) return;
   const viewKey = `${S.view}:${S.view === "sessions" ? S.sel + S.tab : ""}`;
@@ -344,7 +347,7 @@ function sessionPane() {
   if (!s) {
     return `<div class="empty"><div><img src="assets/watching.png" alt="">
       <h2>${S.sessions.length ? "Choose a session" : "Nothing running"}</h2>
-      <p>Sessions from Claude Code, Codex, Antigravity, Cursor, Gemini, OpenCode and Kilo appear here as soon as they start.</p>
+      <p>Claude Code sessions appear here as soon as they start, from your terminal, the background, or the Claude app.</p>
       <button class="btn default large" data-act="new">New Session</button></div></div>`;
   }
   return S.tab === "git" ? gitPane(s) : activityPane(s);
@@ -482,7 +485,10 @@ const actLine = (e) =>
     ? `<div class="act err">${G.alert}<span class="ta selectable">${esc(e.text)}</span></div>`
     : `<div class="act">${toolIcon(e.tool)}<span class="tn">${esc(e.tool || "")}</span><span class="ta">${esc(e.desc || e.text)}</span></div>`;
 
-// ---------- composer ----------
+// ---------- composer + session controls ----------
+const MODE_LABELS = { auto: "Auto", manual: "Manual", acceptEdits: "Accept edits", plan: "Plan" };
+const MODE_HINTS = { auto: "Claude decides what needs asking", manual: "Asks before anything that changes things", acceptEdits: "Edits files without asking", plan: "Plans first, changes nothing" };
+const G_CHEV = '<svg viewBox="0 0 16 16"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></svg>';
 function renderComposer() {
   const s = S.view === "sessions" && S.tab === "activity" ? selected() : null;
   $("#composer").hidden = !s;
@@ -492,18 +498,142 @@ function renderComposer() {
     S.composerKey = s.key;
     ta.value = S.drafts[s.key] || "";
     autosize();
+    closePalette();
   }
-  ta.placeholder = `Message ${s.name}`;
+  ta.placeholder = s.managed ? `Message ${s.name}, or / for commands` : `Message ${s.name}`;
   const d = S.detail && S.detail.session.key === s.key ? S.detail : null;
-  let hint = "";
-  if (d && !d.typable) {
-    hint = s.tool === "claude" && s.bg
-      ? "Background session: sending resumes it with your message"
-      : "Copies your message and opens its window. Start agents with grandaddy run to send directly.";
+  const c = (d && d.control) || {};
+  let bar = "";
+  if (s.managed) {
+    const mode = c.mode || "";
+    bar = `<button type="button" class="chipbtn" data-menu="mode"><span class="mode-dot m-${esc(mode)}"></span>${esc(MODE_LABELS[mode] || "Mode")}${G_CHEV}</button>
+      <button type="button" class="chipbtn" data-menu="model">${esc((d && d.model) || "Model")}${G_CHEV}</button>
+      <button type="button" class="chipbtn" data-menu="effort">Effort ${esc(c.effort || "")}${G_CHEV}</button>
+      <button type="button" class="chipbtn" data-act-c="slash">/ Commands</button>
+      <span class="grow"></span>
+      ${s.status === "working" ? `<button type="button" class="chipbtn danger" data-act-c="interrupt">Interrupt <kbd>esc</kbd></button>` : ""}`;
   }
-  $("#composer-hint").innerHTML = `<span>${esc(hint)}</span><span><kbd>⏎</kbd> send · <kbd>⇧⏎</kbd> new line</span>`;
+  $("#controls").innerHTML = bar;
+  $("#controls").hidden = !bar;
+  let hint = "";
+  if (!s.managed) {
+    hint = s.bg
+      ? "Background session: sending resumes it with your message"
+      : (S.settings && S.settings.terminal)
+        ? "Started before terminal control was on, so this copies your message and opens its window. New sessions you start with claude are fully controllable."
+        : "Can't type into this session, so this copies your message and opens its window.";
+  }
+  $("#composer-hint").innerHTML = `<span>${esc(hint)}${!s.managed && !s.bg && !(S.settings && S.settings.terminal) ? ` <button type="button" class="link" data-act-c="enable-terminal">Control sessions from here</button>` : ""}</span><span><kbd>⏎</kbd> send · <kbd>⇧⏎</kbd> new line</span>`;
+  $("#composer-send").disabled = !ta.value.trim();
+  renderMenu();
+}
+
+/** The dropdown menus of the control bar (mode, model, effort). */
+function renderMenu() {
+  const m = $("#menu");
+  const s = selected();
+  if (!S.menu || !s) { m.hidden = true; return; }
+  const c = (S.detail && S.detail.control) || {};
+  let items = [];
+  if (S.menu === "mode") items = Object.keys(MODE_LABELS).map((k) => ({ act: "mode", v: k, t: MODE_LABELS[k], d: MODE_HINTS[k], on: c.mode === k }));
+  if (S.menu === "model") items = ["fable", "opus", "sonnet", "haiku"].map((k) => ({ act: "send", v: `/model ${k}`, t: k[0].toUpperCase() + k.slice(1), d: `/model ${k}`, on: ((S.detail && S.detail.model) || "").includes(k) }));
+  if (S.menu === "effort") items = ["low", "medium", "high", "xhigh", "max"].map((k) => ({ act: "send", v: `/effort ${k}`, t: k, d: `/effort ${k}`, on: c.effort === k }));
+  m.innerHTML = items.map((it) => `<button type="button" class="menu-item ${it.on ? "on" : ""}" data-menu-act="${it.act}" data-v="${esc(it.v)}"><span class="t">${esc(it.t)}</span><span class="d">${esc(it.d)}</span>${it.on ? G.check : ""}</button>`).join("")
+    + (S.menu === "effort" ? `<div class="menu-note">Claude Code also keeps this as the default for new sessions on this model.</div>` : "");
+  const anchor = $(`#controls [data-menu="${S.menu}"]`);
+  if (anchor) {
+    const r = anchor.getBoundingClientRect(), box = $(".content").getBoundingClientRect();
+    m.style.left = `${r.left - box.left}px`;
+    m.style.bottom = `${box.bottom - r.top + 6}px`;
+  }
+  m.hidden = false;
+}
+
+/** The slash command palette, opened by typing "/" at the start of the message. */
+function paletteItems(q) {
+  const s = selected();
+  const all = (s && S.cmds[s.key]) || [];
+  const flat = [];
+  for (const c of all) {
+    if (c.choices.length) c.choices.forEach((ch) => flat.push({ text: `/${c.name} ${ch}`, name: c.name, desc: c.description, src: c.source, menu: false, args: false }));
+    else flat.push({ text: `/${c.name}`, name: c.name, desc: c.description, src: c.source, menu: c.opens_menu, args: c.takes_text });
+  }
+  const term = q.slice(1).toLowerCase();
+  return flat.filter((f) => !term || f.text.slice(1).toLowerCase().startsWith(term) || f.name.toLowerCase().includes(term)).slice(0, 60);
+}
+function renderPalette() {
+  const p = $("#palette");
+  const ta = $("#composer-text");
+  const s = selected();
+  const v = ta.value;
+  if (!s || !s.managed || !v.startsWith("/") || v.includes("\n") || (v.includes(" ") && !paletteItems(v).length)) return closePalette();
+  S.pal.items = paletteItems(v);
+  if (!S.pal.items.length) return closePalette();
+  S.pal.open = true;
+  S.pal.i = Math.min(S.pal.i, S.pal.items.length - 1);
+  p.innerHTML = S.pal.items.map((it, i) => `<button type="button" class="pal-item ${i === S.pal.i ? "on" : ""}" data-i="${i}"><span class="cmd">${esc(it.text)}</span><span class="desc">${esc(it.desc)}</span>${it.menu ? '<span class="tag">opens a menu</span>' : it.src !== "built-in" ? `<span class="tag">${esc(it.src)}</span>` : ""}</button>`).join("");
+  p.hidden = false;
+  p.querySelector(".pal-item.on")?.scrollIntoView({ block: "nearest" });
+}
+function closePalette() { S.pal.open = false; S.pal.i = 0; $("#palette").hidden = true; }
+function choosePalette(i) {
+  const it = S.pal.items[i];
+  if (!it) return;
+  const ta = $("#composer-text");
+  ta.value = it.args ? `${it.text} ` : it.text;
+  if (S.sel) S.drafts[S.sel] = ta.value;
+  closePalette();
+  ta.focus();
   $("#composer-send").disabled = !ta.value.trim();
 }
+
+/** Send text to the selected session (a message or a slash command). */
+async function sendToSession(text, btn) {
+  const s = selected();
+  if (!s || !text.trim()) return;
+  if (btn) btn.classList.add("busy");
+  let r;
+  if (s.bg && s.sid && !s.managed && !(S.detail && S.detail.typable)) r = await act(invoke("resume_session", { sid: s.sid, cwd: s.cwd, prompt: text }), `Sent to ${s.name}`);
+  else {
+    try {
+      r = await invoke("send_prompt", { key: s.key, text, focus: false });
+      toast(r.message || "Sent");
+    } catch (e) {
+      const msg = String(e);
+      const there = msg.match(/unsent text in its input box: (.*)$/s);
+      if (there && await confirmAlert("Replace what's in the session's input box?", `It already has ${there[1]}, typed in the terminal or put back after an interrupt. Your message replaces it.`, "Replace and Send")) {
+        r = await act(invoke("send_prompt", { key: s.key, text, focus: false, replace: true }));
+      } else if (!there) toast(msg, true);
+    }
+  }
+  if (btn) btn.classList.remove("busy");
+  setTimeout(tick, 700);
+  return r;
+}
+
+$("#composer").addEventListener("click", async (e) => {
+  const pal = e.target.closest(".pal-item");
+  if (pal) return choosePalette(+pal.dataset.i);
+  const mi = e.target.closest("[data-menu-act]");
+  if (mi) {
+    const s = selected();
+    S.menu = null;
+    renderMenu();
+    if (mi.dataset.menuAct === "mode") { await act(invoke("session_mode", { key: s.key, mode: mi.dataset.v })); return tick(); }
+    return sendToSession(mi.dataset.v);
+  }
+  const menu = e.target.closest("[data-menu]");
+  if (menu) { S.menu = S.menu === menu.dataset.menu ? null : menu.dataset.menu; return renderMenu(); }
+  const a = e.target.closest("[data-act-c]");
+  if (!a) return;
+  const s = selected();
+  if (a.dataset.actC === "slash") { const ta = $("#composer-text"); ta.value = "/"; ta.focus(); S.pal.i = 0; return renderPalette(); }
+  if (a.dataset.actC === "interrupt") return act(invoke("session_key", { key: s.key, name: "interrupt" }), "Interrupted", a);
+  if (a.dataset.actC === "enable-terminal") { await act(invoke("set_terminal", { on: true })); S.settings = await invoke("settings"); return renderComposer(); }
+});
+document.addEventListener("mousedown", (e) => {
+  if (S.menu && !e.target.closest("#menu") && !e.target.closest("[data-menu]")) { S.menu = null; renderMenu(); }
+});
 function autosize() {
   const ta = $("#composer-text");
   ta.style.height = "auto";
@@ -513,10 +643,25 @@ $("#composer-text").addEventListener("input", (e) => {
   if (S.sel) S.drafts[S.sel] = e.target.value;
   $("#composer-send").disabled = !e.target.value.trim();
   autosize();
+  S.pal.i = 0;
+  renderPalette();
 });
 $("#composer-text").addEventListener("keydown", (e) => {
+  if (S.pal.open) {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      S.pal.i = (S.pal.i + (e.key === "ArrowDown" ? 1 : -1) + S.pal.items.length) % S.pal.items.length;
+      return renderPalette();
+    }
+    if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && S.pal.items[S.pal.i] && S.pal.items[S.pal.i].text !== e.target.value.trim())) {
+      e.preventDefault();
+      return choosePalette(S.pal.i);
+    }
+    if (e.key === "Escape") { e.preventDefault(); return closePalette(); }
+  }
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
+    closePalette();
     $("#composer").requestSubmit();
   }
 });
@@ -527,11 +672,7 @@ $("#composer").addEventListener("submit", async (e) => {
   if (!s || !text) return;
   const btn = $("#composer-send");
   btn.disabled = true;
-  btn.classList.add("busy");
-  let r;
-  if (s.bg && s.sid && !(S.detail && S.detail.typable)) r = await act(invoke("resume_session", { sid: s.sid, cwd: s.cwd, prompt: text }), `Sent to ${s.name}`);
-  else r = await act(invoke("send_prompt", { key: s.key, text, focus: false }));
-  btn.classList.remove("busy");
+  const r = await sendToSession(text, btn);
   if (r) {
     $("#composer-text").value = "";
     delete S.drafts[s.key];
@@ -614,24 +755,22 @@ function goalsPane() {
   if (S.goals == null) return skeleton(4);
   const s = selected();
   const cwd = S.form.goalCwd ?? (s ? s.cwd : "");
-  const agent = S.form.goalAgent || "claude";
   let h = `<div class="page"><h1 class="page-title">Goals</h1>
     <p class="lead">Describe the outcome you want. The agent asks what it needs to know first, then works on its own and checks with you before any major decision, here and on your phone.</p>
     <div class="group"><div class="form-cell">
       <label>Goal</label><textarea rows="3" ${field("goalText")} placeholder="Add CSV export to the reports page, with tests">${fval("goalText")}</textarea>
       <label>Folder</label><input ${field("goalCwd")} value="${esc(cwd)}" spellcheck="false" placeholder="~/code/project">
-      <label>Agent</label><select ${field("goalAgent")}>${AGENTS.map(([v, l]) => `<option value="${v}" ${v === agent ? "selected" : ""}>${l}</option>`).join("")}</select>
       <label>Model</label><input ${field("goalModel")} value="${fval("goalModel")}" placeholder="Default" spellcheck="false">
-      ${agent === "claude" ? `<span></span><label class="check"><input type="checkbox" ${field("goalTerminal")} ${S.form.goalTerminal ? "checked" : ""}> Open in a terminal window instead of the background</label>` : ""}
+      <span></span><label class="check"><input type="checkbox" ${field("goalTerminal")} ${S.form.goalTerminal ? "checked" : ""}> Open in a terminal window instead of the background</label>
     </div><div class="actions"><button class="btn default large" data-act="goal-start">Start Goal</button></div></div>
-    <p class="footnote">${agent === "claude" ? "Claude Code's questions come to Grandaddy and your phone." : "This agent asks its questions in its own window, which opens in your terminal."}</p>`;
+    <p class="footnote">Its questions come to Grandaddy and your phone.</p>`;
   if (S.goals.length) {
     h += `<h2 class="group-title">Your Goals</h2><div class="group">` + S.goals.map((g) => {
       const live = g.session_key && S.sessions.some((x) => x.key === g.session_key);
       const tag = { asking: ["orange", "Asking questions"], working: ["", "Working"], "needs you": ["orange", "Needs you"], done: ["green", "Done"], stopped: ["", "Stopped"] }[g.status] || ["", g.status];
       return `<div class="cell ${live ? "clickable" : ""}" ${live ? `data-act="goto" data-key="${esc(g.session_key)}"` : ""}>
         ${statusGlyph(g.status === "asking" ? "needs you" : g.status)}<div class="grow"><div class="t">${esc(g.text)}</div>
-        <div class="s">${esc(AGENTS.find(([v]) => v === g.tool)?.[1] || g.tool)} · ${esc(g.cwd.replace(/^\/Users\/[^/]+/, "~"))}</div>
+        <div class="s">${esc(g.cwd.replace(/^\/Users\/[^/]+/, "~"))}</div>
         ${g.summary ? `<div class="s selectable">${esc(g.summary)}</div>` : ""}</div>
         <span class="tag ${tag[0]}">${tag[1]}</span>
         <button class="tool" data-act="goal-rm" data-id="${esc(g.id)}" title="Remove from the list">${G.x}</button></div>`;
@@ -650,7 +789,7 @@ function loopsPane() {
       <label>Prompt</label><textarea rows="2" ${field("loopPrompt")} placeholder="Run the test suite and fix anything that fails">${fval("loopPrompt")}</textarea>
       <label>Every</label><input ${field("loopEvery")} value="${fval("loopEvery", "30m")}" style="width:100px" spellcheck="false">
       <label>Send to</label><select ${field("loopTarget")}><option value="" ${!target ? "selected" : ""}>A new Claude session each time</option>
-        ${S.sessions.map((s) => `<option value="${esc(s.key)}" ${s.key === target ? "selected" : ""}>${esc(s.name)} · ${esc(s.tool_label)}</option>`).join("")}</select>
+        ${S.sessions.map((s) => `<option value="${esc(s.key)}" ${s.key === target ? "selected" : ""}>${esc(s.name)} · ${esc(s.folder)}</option>`).join("")}</select>
       ${!target ? `<label>Folder</label><input ${field("loopCwd")} value="${fval("loopCwd")}" placeholder="~/code/project" spellcheck="false">` : ""}
       <label>Stop when</label><input ${field("loopUntil")} value="${fval("loopUntil")}" placeholder="the reply contains… (optional)">
       <label>At most</label><input ${field("loopMax")} value="${fval("loopMax")}" placeholder="unlimited" style="width:100px">
@@ -710,41 +849,14 @@ function usagePane() {
   return h + `</div>`;
 }
 
-// ---------- agents ----------
 const sw = (attrs, on) => `<label class="switch"><input type="checkbox" ${attrs} ${on ? "checked" : ""}><i></i></label>`;
-function agentsPane() {
-  if (!S.agents) return skeleton(6);
-  const mesh = S.settings && S.settings.mesh;
-  let h = `<div class="page"><h1 class="page-title">Agents</h1>
-    <p class="lead">Grandaddy shows sessions from every agent below. Connect approvals so their permission prompts follow your rules and auto-yes, and can be answered here or on your phone.</p>
-    <div class="group">` + S.agents.map((a) => {
-      const status = !a.detected ? ["", "Not on this Mac"] : !a.hookable ? ["", "Sessions only"] : a.hook ? ["green", "Connected"] : ["", "Not connected"];
-      let row = `<div class="cell"><div class="grow"><div class="t">${esc(a.label)}</div>${a.hook && a.note ? `<div class="s">${esc(a.note)}</div>` : !a.hookable && a.detected ? `<div class="s">It has no approval hook, so its prompts are answered in its own window.</div>` : ""}</div>
-        <span class="tag ${status[0]}">${status[1]}</span>`;
-      if (a.hookable) row += sw(`data-act="hook" data-tool="${a.tool}" ${a.detected ? "" : "disabled"}`, a.hook);
-      row += `</div>`;
-      if (a.hookable && a.hook && a.tool !== "claude") {
-        row += `<div class="cell"><div class="grow"><div class="s">Hold ${esc(a.label)}'s prompts for an answer from Grandaddy or your phone. Its own prompt appears if you don't answer within ${S.settings ? S.settings.remoteTimeout : 120}s.</div></div>
-          ${sw(`data-act="remote" data-tool="${a.tool}"`, a.remote)}</div>`;
-      }
-      return row;
-    }).join("") + `</div>`;
-  h += `<h2 class="group-title">Experimental</h2><div class="group"><div class="cell"><div class="grow"><div class="t">Sessions talk to each other</div>
-    <div class="s">Adds a grandaddy MCP server, so a session can list, read and message other sessions, or start helpers in any agent and model and wait for their results.</div></div>
-    ${sw('data-act="mesh"', mesh)}</div>`;
-  if (mesh) {
-    h += S.agents.filter((a) => a.detected).map((a) => `<div class="cell"><div class="grow">${esc(a.label)}${["opencode", "kilo"].includes(a.tool) && !a.mcp ? `<div class="s selectable"><code>${esc(a.mcpSnippet)}</code></div>` : ""}</div>
-      ${["opencode", "kilo"].includes(a.tool) ? `<span class="tag">${a.mcp ? "Added" : "Add by hand"}</span>` : sw(`data-act="mcp" data-tool="${a.tool}"`, a.mcp)}</div>`).join("");
-  }
-  return h + `</div><p class="footnote">Sessions only accept messages from other sessions when they were started with grandaddy run.</p></div>`;
-}
 
 // ---------- rules ----------
 function rulesPane() {
   if (S.rules == null) return skeleton(3);
   const examples = [["yes Bash(npm test*)", "approve test runs everywhere"], ["ask Bash(git push*)", "always ask, even with auto-yes on"], ["no Bash(rm -rf /*)", "refuse outright"]];
   let h = `<div class="page"><h1 class="page-title">Rules</h1>
-    <p class="lead">Rules answer permission prompts for every connected agent before anything else does. The first match wins. Questions are never answered by a rule.</p>`;
+    <p class="lead">Rules answer Claude Code's permission prompts before anything else does. The first match wins. Questions are never answered by a rule.</p>`;
   h += S.rules.length
     ? `<div class="group">` + S.rules.map((r, i) => `<div class="cell"><span class="tag ${r.verb === "no" ? "red" : r.verb === "yes" ? "green" : "orange"}">${esc(r.verb)}</span>
         <code class="grow selectable">${esc(r.text.replace(/^\w+\s+/, ""))}</code><button class="tool" data-act="rule-rm" data-n="${i + 1}" title="Remove">${G.x}</button></div>`).join("") + `</div>`
@@ -763,10 +875,13 @@ function settingsPane() {
   const mode = st.lidMode || "sleep";
   const ac = st.autoContinue || { enabled: false, message: "continue" };
   let h = `<div class="page"><h1 class="page-title">Settings</h1>`;
+  h += `<h2 class="group-title">Claude Code</h2><div class="group">
+    <div class="cell"><div class="grow"><div class="t">Control sessions from Grandaddy</div><div class="s">New sessions you start with <code>claude</code> in your terminal run inside Grandaddy, so the app can send them messages, slash commands and mode changes. Adds a few lines to your shell profile; turning it off removes them. Open a new terminal tab after switching it on.</div></div>${sw('data-act="terminal"', st.terminal)}</div>
+    <div class="cell"><div class="grow"><div class="t">Answer prompts and questions here</div><div class="s">Claude Code's permission prompts and questions come to Grandaddy and your phone, and follow your rules and auto-yes.</div></div>${sw('data-act="hook"', st.hookInstalled)}</div></div>`;
 
   h += `<h2 class="group-title">Power</h2><div class="group">
-    <div class="cell"><div class="grow"><div class="t">Keep the Mac awake while agents need it</div><div class="s">${(aw.reasons || []).length ? `Holding it awake: ${esc(aw.reasons.join(", "))}. The display still sleeps.` : "Nothing needs it right now, so it sleeps as usual."}</div></div>${sw('data-act="awake"', st.awake ? aw.enabled : true)}</div>
-    <div class="cell" style="display:block;padding-bottom:0"><div class="t">When the lid closes</div><div class="s">Applies while agents need the Mac: working, waiting on you, due to continue after a limit, or a loop due within the hour. Keep it somewhere it can breathe, not in a bag.</div></div>
+    <div class="cell"><div class="grow"><div class="t">Keep the Mac awake while Claude needs it</div><div class="s">${(aw.reasons || []).length ? `Holding it awake: ${esc(aw.reasons.join(", "))}. The display still sleeps.` : "Nothing needs it right now, so it sleeps as usual."}</div></div>${sw('data-act="awake"', st.awake ? aw.enabled : true)}</div>
+    <div class="cell" style="display:block;padding-bottom:0"><div class="t">When the lid closes</div><div class="s">Applies while any Claude session is open, even one waiting on you, and while a session is due to continue after a limit or a loop is due within the hour. Keep it somewhere it can breathe, not in a bag.</div></div>
     <div class="choices">
       ${[["sleep", "Sleep", "The Mac sleeps, as usual."], ["full", "Keep everything on", "The whole Mac keeps running."], ["agents", "Agents only", "Display off, other apps paused, sound muted, Low Power Mode. All undone when you open it."]]
         .map(([v, t, d]) => `<button class="choice ${mode === v ? "on" : ""}" data-act="lid" data-mode="${v}"><b>${t}</b><span>${d}</span></button>`).join("")}
@@ -787,8 +902,10 @@ function settingsPane() {
     <div class="inline-form"><span class="muted" style="width:70px">Message</span><input ${field("acMessage")} value="${fval("acMessage", ac.message)}" placeholder="continue"><button class="btn" data-act="ac-save">Save</button></div></div>
     <p class="footnote">It types into sessions started with grandaddy run, or running in iTerm, Terminal or tmux, and resumes background Claude sessions. For any other session you get a notification when its limit resets.</p>`;
 
+  h += `<h2 class="group-title">Experimental</h2><div class="group"><div class="cell"><div class="grow"><div class="t">Sessions talk to each other</div>
+    <div class="s">Adds a grandaddy MCP server to Claude Code, so a session can list, read and message other sessions, or start helpers on any model and wait for their results.</div></div>${sw('data-act="mesh"', st.mesh)}</div></div>`;
   h += `<h2 class="group-title">Approvals</h2><div class="group">
-    <div class="cell"><div class="grow"><div class="t">Auto-yes for every session</div><div class="s">Approves every permission prompt in every connected agent, except ones your rules say to ask about.</div></div>${sw('data-act="auto-all"', st.autoAll)}</div></div>`;
+    <div class="cell"><div class="grow"><div class="t">Auto-yes for every session</div><div class="s">Approves every permission prompt in every session, except ones your rules say to ask about.</div></div>${sw('data-act="auto-all"', st.autoAll)}</div></div>`;
 
   h += `<h2 class="group-title">Phone</h2><div class="group">`;
   if (st.phone) {
@@ -826,6 +943,7 @@ function select(key) {
   S.jumpToEnd = true;
   render();
   refreshDetail().then(() => refreshView(true)).then(render);
+  loadCommands(S.sessions.find((x) => x.key === key));
 }
 window.grandaddy = { select };
 
@@ -881,7 +999,7 @@ $("#pane").addEventListener("change", (e) => {
   const f = e.target.dataset.f;
   if (f) {
     S.form[f] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
-    if (["goalAgent", "loopTarget"].includes(f)) { e.target.blur(); repaint(); }
+    if (f === "loopTarget") { e.target.blur(); repaint(); }
   }
   const a = e.target.dataset.act;
   if (a && e.target.type === "checkbox") onToggle(a, e.target);
@@ -902,12 +1020,13 @@ function answerReady(rid) {
 
 async function onToggle(a, el) {
   const on = el.checked;
-  const tool = el.dataset.tool;
   let ok;
-  if (a === "hook") ok = await act(invoke("agent_hook", { tool, on }), on ? "Connected" : "Disconnected");
-  else if (a === "remote") ok = await act(invoke("agent_remote", { tool, on }), on ? "Prompts will wait for you here" : "Prompts go straight to the agent");
-  else if (a === "mcp") ok = await act(invoke("agent_mcp", { tool, on }));
-  else if (a === "mesh") ok = await act(invoke("set_mesh", { on }), on ? "Sessions can talk to each other" : "Turned off");
+  if (a === "hook") ok = await act(invoke("set_hook", { on }));
+  else if (a === "terminal") ok = await act(invoke("set_terminal", { on }));
+  else if (a === "mesh") {
+    ok = await act(invoke("set_mesh", { on }), on ? "Sessions can talk to each other" : "Turned off");
+    if (ok !== undefined) await act(invoke("set_mcp", { on }));
+  }
   else if (a === "login") ok = await act(invoke("set_login", { on }), on ? "Grandaddy opens at login" : "Won't open at login");
   else if (a === "auto-continue") ok = await act(invoke("set_auto_continue", { enabled: on, message: S.form.acMessage || (S.settings.autoContinue || {}).message || "continue" }), on ? "Sessions will continue after their limits reset" : "Auto-continue off");
   else if (a === "auto-all") {
@@ -918,7 +1037,6 @@ async function onToggle(a, el) {
   else if (a === "loop-toggle") ok = await act(invoke("loop_toggle", { id: el.dataset.id, on }), on ? "Resumed" : "Paused");
   if (ok === undefined) el.checked = !on;
   await refreshView(true);
-  if (["hook", "remote", "mcp", "mesh"].includes(a)) S.agents = await invoke("agents");
   if (a === "auto-continue") S.settings = await invoke("settings");
   repaint();
 }
@@ -1017,8 +1135,8 @@ $("#pane").addEventListener("click", async (e) => {
     }
 
     case "goal-start": {
-      const r = await run(invoke("goal_start", { text: F.goalText || "", cwd: F.goalCwd ?? (s ? s.cwd : ""), agent: F.goalAgent || "claude", model: F.goalModel || null, terminal: !!F.goalTerminal }),
-        (F.goalAgent || "claude") === "claude" && !F.goalTerminal ? "Goal started. Its first questions will appear here shortly." : "Goal opened in a terminal window.");
+      const r = await run(invoke("goal_start", { text: F.goalText || "", cwd: F.goalCwd ?? (s ? s.cwd : ""), agent: "claude", model: F.goalModel || null, terminal: !!F.goalTerminal }),
+        !F.goalTerminal ? "Goal started. Its first questions will appear here shortly." : "Goal opened in a terminal window.");
       if (r !== undefined) F.goalText = "";
       return after(r);
     }

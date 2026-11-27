@@ -10,8 +10,7 @@ fn main() {
     if args.get(1).map(String::as_str) == Some("hook") {
         let mut input = String::new();
         let _ = std::io::stdin().read_to_string(&mut input);
-        let agent = args.iter().position(|a| a == "--tool").and_then(|i| args.get(i + 1)).map(String::as_str);
-        if let Some(out) = grandaddy_core::hook::run(&input, agent) {
+        if let Some(out) = grandaddy_core::hook::run(&input) {
             println!("{out}");
         }
         return;

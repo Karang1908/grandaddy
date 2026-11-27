@@ -154,13 +154,7 @@ fn hosts(live: &[Session], apps: &HashMap<String, AppProcs>, parent: &HashMap<i6
             }
         }
         if s.surface != "CLI" {
-            let name = match s.tool.as_str() {
-                "cursor" => "Cursor",
-                "antigravity" => "Antigravity",
-                "claude" => "Claude",
-                "codex" => if s.surface == "IDE" { "Visual Studio Code" } else { "Codex" },
-                _ => "",
-            };
+            let name = if s.tool == "claude" { "Claude" } else { "" };
             for (b, a) in apps {
                 if !name.is_empty() && a.name.starts_with(name) {
                     keep.insert(b.clone());
@@ -211,6 +205,7 @@ pub struct Keeper {
     lid_actions: bool,
     idle_since: Option<f64>,
     last_display_off: f64,
+    last_verify: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -265,17 +260,27 @@ fn thaw() {
     util::remove(&mark("frozen"));
 }
 
-/// While the shell is alive it waits for `pid` to die, then undoes everything still recorded.
+/// Is sleep disabled right now, as macOS sees it?
+fn sleep_disabled() -> Option<bool> {
+    let o = Command::new("pmset").arg("-g").output().ok()?;
+    String::from_utf8_lossy(&o.stdout).lines().find(|l| l.trim_start().starts_with("SleepDisabled")).map(|l| l.trim_end().ends_with('1'))
+}
+
+/// The shell waits for `pid` to die, then undoes everything still recorded, unless a newer
+/// keeper has taken the marks over since (the app restarting, or the daemon taking over): those
+/// changes are the new keeper's to undo.
 fn spawn_watchdog() {
     let pid = std::process::id();
     let d = dir();
     let script = format!(
         r#"while kill -0 {pid} 2>/dev/null; do sleep 3; done
 cd '{d}' 2>/dev/null || exit 0
+[ "$(cat owner 2>/dev/null)" = "{pid}" ] || exit 0
 [ -f frozen ] && cut -d' ' -f1 frozen | xargs kill -CONT 2>/dev/null; rm -f frozen
 [ -f muted ] && osascript -e 'set volume output muted false' && rm -f muted
 [ -f lowpower ] && sudo -n /usr/bin/pmset -b lowpowermode 0 && rm -f lowpower
 [ -f sleep-disabled ] && sudo -n /usr/bin/pmset -a disablesleep 0 && rm -f sleep-disabled
+rm -f owner
 exit 0"#,
         d = d.display()
     );
@@ -286,6 +291,7 @@ impl Keeper {
     pub fn new() -> Keeper {
         let _ = std::fs::create_dir_all(dir());
         recover();
+        let _ = std::fs::write(mark("owner"), std::process::id().to_string());
         spawn_watchdog();
         Keeper::default()
     }
@@ -318,7 +324,21 @@ impl Keeper {
         }
 
         let mode = cfg.lid_mode().to_string();
-        let want_lid = want && mode != "sleep" && lid_helper_installed();
+        // with a lid mode chosen, any open Claude session keeps the Mac on, even one that's idle
+        // waiting for you: you chose to keep your agents running with the lid shut
+        let open = live.iter().filter(|s| !matches!(s.status.as_str(), "blocked" | "failed")).count();
+        if open > 0 && self.reasons.is_empty() && mode != "sleep" {
+            self.reasons.push(if open == 1 { "a Claude session is open".into() } else { format!("{open} Claude sessions are open") });
+        }
+        let want_lid = cfg.enabled && (want || open > 0) && mode != "sleep" && lid_helper_installed();
+        // something else can turn sleep back on (another tool, a stale watchdog): check now and then
+        if self.lid_hold && want_lid && now() - self.last_verify > 15.0 {
+            self.last_verify = now();
+            if sleep_disabled() == Some(false) {
+                util::log("sleep was turned back on behind grandaddy's back; holding the lid again");
+                self.lid_hold = false;
+            }
+        }
         if want_lid && !self.lid_hold {
             let _ = std::fs::write(mark("sleep-disabled"), "1");
             self.lid_hold = sudo_pmset(&["-a", "disablesleep", "1"]);
@@ -346,7 +366,8 @@ impl Keeper {
             self.pause_new_apps(live, &cfg.keep); // apps opened since the lid closed
         }
         // with sleep disabled, macOS leaves the display lit under a closed lid
-        if closed && now() - self.last_display_off > 60.0 {
+        // "agents only" turns the display off; "keep everything on" leaves it alone, so nothing locks
+        if closed && mode == "agents" && now() - self.last_display_off > 60.0 {
             let _ = Command::new("pmset").arg("displaysleepnow").status();
             self.last_display_off = now();
         }
@@ -442,6 +463,10 @@ impl Drop for Keeper {
     fn drop(&mut self) {
         if let Some(mut c) = self.caffeinate.take() {
             let _ = c.kill();
+        }
+        // a newer keeper took over what's recorded: undoing it would undo that keeper's work
+        if std::fs::read_to_string(mark("owner")).ok().as_deref().map(str::trim) != Some(&std::process::id().to_string()) {
+            return;
         }
         if self.lid_actions {
             self.undo_agents_only();

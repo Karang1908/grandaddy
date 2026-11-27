@@ -59,7 +59,7 @@ pub struct Question {
 
 /// The question an idle session ended its turn with, if it did.
 fn waiting_question(s: &Session) -> Option<Question> {
-    if s.status != "idle" || !FILE_BACKED.contains(&s.tool.as_str()) {
+    if s.status != "idle" {
         return None;
     }
     let act = activity(s);
@@ -146,7 +146,7 @@ pub fn collect() -> Vec<Session> {
             transcript: f.source.as_ref().filter(|s| !s.contains('|') && s.starts_with('/')).map(PathBuf::from),
             source: f.source,
             model: f.model,
-            can_answer: f.answer != Answer::None,
+            can_answer: true,
             answer: f.answer,
             managed: None,
             limit: None,
@@ -188,11 +188,8 @@ pub fn activity(s: &Session) -> Activity {
     if s.tool == "claude" {
         return s.transcript.as_ref().map(|p| claude::activity(p)).unwrap_or_default();
     }
-    s.source.as_ref().map(|src| providers::activity(&s.tool, src)).unwrap_or_default()
+    s.source.as_ref().map(|src| claude::activity(Path::new(src))).unwrap_or_default()
 }
-
-/// Tools whose activity is cheap to re-read (cached file parses), used for conflict checks.
-const FILE_BACKED: &[&str] = &["claude", "codex", "antigravity", "gemini", "qwen"];
 
 /// Files this session edited recently that another live session edited too: {path: [names]}.
 pub fn conflicts(s: &Session, everyone: &[Session]) -> BTreeMap<String, Vec<String>> {
@@ -203,7 +200,7 @@ pub fn conflicts(s: &Session, everyone: &[Session]) -> BTreeMap<String, Vec<Stri
     if mine.is_empty() {
         return out;
     }
-    for o in everyone.iter().filter(|o| o.key != s.key && FILE_BACKED.contains(&o.tool.as_str())) {
+    for o in everyone.iter().filter(|o| o.key != s.key) {
         for f in recent(&activity(o)).keys() {
             if mine.contains_key(f) {
                 out.entry(f.clone()).or_default().push(o.name.clone());
