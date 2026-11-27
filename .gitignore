@@ -3,3 +3,4 @@ app/src-tauri/gen/
 __pycache__/
 *.pyc
 .DS_Store
+app/src-tauri/binaries/

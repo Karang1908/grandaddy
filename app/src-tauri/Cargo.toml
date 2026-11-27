@@ -10,10 +10,11 @@ name = "grandaddy_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-grandaddy-core = { version = "0.2.0", path = "../../crates/grandaddy-core" }
+grandaddy-core = { version = "0.3.0", path = "../../crates/grandaddy-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-tauri = { version = "2.12.7", features = ["macos-private-api"] }
+tauri = { version = "2.12.7", features = ["image-png", "macos-private-api", "tray-icon"] }
+tiny_http = "0.12"
 
 [build-dependencies]
 tauri-build = { version = "2.7.6", features = [] }

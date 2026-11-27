@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Grandaddy</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* The menu bar panel sits on the system popover material (set by the window). */
+    html, body { background: transparent; height: 100%; }
+    body { display: flex; flex-direction: column; font-size: 13px; }
+    header { display: flex; align-items: center; gap: 10px; padding: 14px 16px 8px; }
+    header img { width: 30px; height: 30px; }
+    header .t { font-size: 13.5px; font-weight: 700; letter-spacing: -0.01em; }
+    header .s { font-size: 12px; color: var(--label-2); margin-top: 1px; }
+    main { flex: 1; overflow-y: auto; padding: 0 8px 8px; scrollbar-width: none; }
+    main::-webkit-scrollbar { display: none; }
+    .sect { font-size: 11px; font-weight: 600; color: var(--label-2); margin: 12px 10px 5px; }
+    .req { margin: 0 2px 8px; padding: 12px 13px; border-radius: 16px; background: var(--sheen), var(--glass); box-shadow: inset 0 0.5px 0 var(--glass-edge), inset 0 0 0 0.5px var(--glass-rim); }
+    .req .who { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; }
+    .req .who .st svg { width: 14px; height: 14px; }
+    .req .who span.agent { margin-left: auto; font-weight: 500; color: var(--label-2); font-size: 11.5px; }
+    .req code { display: block; margin-top: 7px; padding: 7px 9px; border-radius: 10px; background: var(--code); max-height: 3.4em; overflow: hidden; white-space: pre-wrap; word-break: break-all; }
+    .req .q { padding: 0; margin-top: 6px; font-size: 12.5px; }
+    .req .row { display: flex; justify-content: flex-end; gap: 6px; margin-top: 10px; }
+    .s-row { display: grid; grid-template-columns: 16px 1fr auto; column-gap: 9px; align-items: center; width: 100%; padding: 7px 10px; border: 0;
+      border-radius: 12px; background: transparent; text-align: left; transition: background-color 140ms; }
+    .s-row:hover { background: var(--fill); }
+    .s-row.open { background: var(--fill); border-radius: 12px 12px 0 0; }
+    .s-row .n { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .s-row .m { grid-column: 2 / 4; font-size: 11px; color: var(--label-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .s-row .w { font-size: 11px; color: var(--label-3); }
+    .inline { display: flex; gap: 6px; padding: 4px 10px 10px 35px; background: var(--fill); border-radius: 0 0 12px 12px; margin-bottom: 2px; }
+    .inline input { flex: 1; height: 28px; background: var(--bg); }
+    .none { padding: 30px 18px; text-align: center; color: var(--label-2); line-height: 1.5; }
+    footer { display: flex; align-items: center; gap: 8px; padding: 10px 12px; }
+    footer .awake { flex: 1; font-size: 11.5px; color: var(--label-2); display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    footer .awake svg { width: 12px; height: 12px; flex: none; }
+    .skel-row { height: 40px; margin: 6px 4px; border-radius: 12px; }
+  </style>
+</head>
+<body>
+  <header><img src="assets/icon.png" alt=""><div><div class="t">Grandaddy</div><div class="s" id="summary">Looking…</div></div></header>
+  <main id="list"><div class="skel skel-row"></div><div class="skel skel-row"></div><div class="skel skel-row"></div></main>
+  <footer>
+    <span class="awake" id="awake"></span>
+    <button class="btn glass small" id="open">Open Grandaddy</button>
+    <button class="tool" id="quit" title="Quit Grandaddy"><svg viewBox="0 0 16 16"><path d="M8 2.5v5M4.5 4.6a5 5 0 1 0 7 0"/></svg></button>
+  </footer>
+  <script>
+  "use strict";
+  const APP_ONLY = new Set(["show_main", "hide_quick", "quit", "ui_log", "debug"]);
+  const invoke = (cmd, args = {}) => (APP_ONLY.has(cmd) ? window.__TAURI__.core.invoke(cmd, args) : window.__TAURI__.core.invoke("call", { cmd, args }));
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const clock = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  const G = {
+    spinner: '<svg viewBox="0 0 16 16">' + [...Array(8)].map((_, i) => `<path d="M8 1.6v2.6" transform="rotate(${i * 45} 8 8)" style="opacity:${(0.2 + (i / 7) * 0.8).toFixed(2)}" stroke-width="1.7"/>`).join("") + "</svg>",
+    needs: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="currentColor" stroke="none"/><path d="M8 4.4v4.2" stroke="#fff" stroke-width="1.8"/><circle cx="8" cy="11.3" r="1" fill="#fff" stroke="none"/></svg>',
+    hourglass: '<svg viewBox="0 0 16 16"><path d="M4 1.8h8M4 14.2h8M5 1.8v1.6c0 1.6 3 3 3 4.6 0-1.6 3-3 3-4.6V1.8M5 14.2v-1.6c0-1.6 3-3 3-4.6 0 1.6 3 3 3 4.6v1.6"/></svg>',
+    warn: '<svg viewBox="0 0 16 16"><path d="M8 2.2 14.2 13H1.8z" fill="currentColor" stroke="none"/><path d="M8 6.2v3.2" stroke="#fff" stroke-width="1.6"/><circle cx="8" cy="11.2" r=".85" fill="#fff" stroke="none"/></svg>',
+    ring: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="4.5" stroke-dasharray="2 2.2"/></svg>',
+    moon: '<svg viewBox="0 0 16 16"><path d="M12.8 10.2A5.5 5.5 0 0 1 5.8 3.2a5.5 5.5 0 1 0 7 7z"/></svg>',
+  };
+  const glyph = (st) =>
+    st === "working" ? `<span class="st working">${G.spinner}</span>` : st === "needs you" ? `<span class="st needs">${G.needs}</span>`
+    : st === "limit" ? `<span class="st limit">${G.hourglass}</span>` : st === "blocked" || st === "failed" ? `<span class="st bad">${G.warn}</span>`
+    : st === "running" ? `<span class="st quiet">${G.ring}</span>` : `<span class="st"></span>`;
+  const ORDER = ["needs you", "working", "limit", "idle", "running"];
+  let sessions = null, openKey = null, last = "", draft = "";
+
+  function summary(r) {
+    const i = r.input || {};
+    if (r.tool === "Bash") return i.command || "";
+    if (i.file_path) return i.file_path;
+    if (r.tool === "ExitPlanMode") return "Has a plan for you";
+    return r.tool;
+  }
+
+  function render() {
+    if (sessions === null) return;
+    if (document.activeElement && document.activeElement.matches("input")) return; // don't redraw under typing
+    const waiting = sessions.filter((s) => s.pending && s.pending.length);
+    const working = sessions.filter((s) => s.status === "working").length;
+    const limited = sessions.filter((s) => s.status === "limit").length;
+    $("#summary").textContent = waiting.length
+      ? `${waiting.length} waiting on you${working ? ` · ${working} working` : ""}`
+      : sessions.length ? [working ? `${working} working` : "Nothing working", limited ? `${limited} paused by limits` : "", `${sessions.length} sessions`].filter(Boolean).join(" · ") : "No sessions running";
+    let h = "";
+    if (waiting.length) {
+      h += `<div class="sect">Needs You</div>`;
+      for (const s of waiting) for (const r of s.pending) {
+        const q = r.tool === "AskUserQuestion";
+        h += `<div class="req"><div class="who">${glyph("needs you")}${esc(s.name)}<span class="agent">${esc(s.tool_label)}</span></div>` +
+          (q ? `<div class="q">${esc((r.input.questions || [])[0]?.question || "A question")}</div><div class="row"><button class="btn default small" data-go="${esc(s.key)}">Answer…</button></div>`
+             : `<code>${esc(summary(r))}</code><div class="row"><button class="btn small" data-deny="${esc(r.id)}">Deny</button><button class="btn default small" data-allow="${esc(r.id)}">Allow</button></div>`) +
+          `</div>`;
+      }
+    }
+    const rest = sessions.filter((s) => !(s.pending && s.pending.length)).sort((a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status));
+    if (rest.length) {
+      h += `<div class="sect">Sessions</div>`;
+      for (const s of rest) {
+        const agent = s.tool === "claude" && s.surface === "CLI" ? "" : s.tool_label;
+        const meta = s.status === "limit" && s.limit && s.limit.resets_at ? `Resets ${clock(s.limit.resets_at)}` : [agent, s.status, s.folder].filter(Boolean).join(" · ");
+        h += `<button class="s-row ${openKey === s.key ? "open" : ""}" data-key="${esc(s.key)}">${glyph(s.status)}
+          <span class="n">${esc(s.name)}</span><span class="w">${esc(s.ago)}</span><span class="m">${esc(meta)}</span></button>`;
+        if (openKey === s.key) h += `<form class="inline" data-send="${esc(s.key)}"><input placeholder="Message ${esc(s.name)}" value="${esc(draft)}"><button class="btn small glass" type="button" data-go="${esc(s.key)}">Open</button></form>`;
+      }
+    }
+    if (!sessions.length) h = `<div class="none">Start Claude Code, Codex, Antigravity, Cursor, Gemini or OpenCode anywhere and it appears here.</div>`;
+    if (h !== last) { $("#list").innerHTML = h; last = h; }
+  }
+
+  async function refresh() {
+    try { sessions = await invoke("list_sessions"); } catch { sessions = sessions || []; }
+    render();
+    try {
+      const st = await invoke("settings");
+      const a = st.awake || {};
+      const text = !a.enabled ? "" : a.agents_only_active ? `Lid closed · agents only · ${a.frozen.length} apps paused` : a.lid_active ? "Awake, even with the lid closed" : a.holding ? "Keeping your Mac awake" : "";
+      $("#awake").innerHTML = text ? `${G.moon}<span>${esc(text)}</span>` : "";
+    } catch {}
+  }
+  window.quick = { refresh: () => { last = ""; openKey = null; refresh(); } };
+
+  document.addEventListener("click", async (e) => {
+    const t = e.target.closest("button");
+    if (!t) return;
+    if (t.dataset.allow || t.dataset.deny) {
+      t.classList.add("busy");
+      try { await invoke("decide", { rid: t.dataset.allow || t.dataset.deny, allow: !!t.dataset.allow }); } catch (err) { note(String(err)); }
+      return refresh();
+    }
+    if (t.dataset.go) return invoke("show_main", { key: t.dataset.go });
+    if (t.dataset.key) {
+      openKey = openKey === t.dataset.key ? null : t.dataset.key;
+      draft = "";
+      last = "";
+      render();
+      document.querySelector(".inline input")?.focus();
+    }
+  });
+  document.addEventListener("input", (e) => { if (e.target.closest(".inline")) draft = e.target.value; });
+  document.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const text = f.querySelector("input").value.trim();
+    if (!text) return;
+    try {
+      const r = await invoke("send_prompt", { key: f.dataset.send, text, focus: false });
+      note(r.message);
+      draft = "";
+      f.querySelector("input").value = "";
+    } catch (err) { note(String(err)); }
+  });
+  function note(m) { $("#awake").textContent = m; setTimeout(refresh, 3000); }
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") invoke("hide_quick"); });
+  $("#open").onclick = () => invoke("show_main", {});
+  $("#quit").onclick = () => invoke("quit");
+  refresh().then(() => invoke("debug")).then((on) => on && invoke("ui_log", { level: "info", msg: `menu bar panel: ${sessions ? sessions.length : "MISSING"} sessions` })).catch(() => {});
+  setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 2500);
+  </script>
+</body>
+</html>

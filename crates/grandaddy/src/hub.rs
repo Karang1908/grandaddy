@@ -2,7 +2,7 @@
 use grandaddy_core::claude::{self, Decision, Event, Past, Tokens};
 use grandaddy_core::sessions::{self, Session};
 use grandaddy_core::util::{self, now};
-use grandaddy_core::{install, launch, phone, rules};
+use grandaddy_core::{install, launch, phone, prompt, rules};
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{self, Event as TermEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::style::{Color, Modifier, Style};
@@ -28,6 +28,7 @@ enum View {
 }
 
 enum Purpose {
+    Prompt(String),
     Search,
     Continue(Past),
     StartFolder,
@@ -433,6 +434,7 @@ impl Hub {
             items.push(k("tab", "next waiting", !waiting_here));
         }
         if let Some(s) = &s {
+            items.push(k("p", "prompt", false));
             items.push(k("o", if s.bg { "attach" } else { "jump to it" }, false));
             if s.tool == "claude" {
                 items.push(k("a", if s.auto { "auto-yes off" } else { "auto-yes" }, false));
@@ -465,7 +467,8 @@ impl Hub {
             let name_w = (width as usize).saturating_sub(chars(&tail) + 12).max(6);
             c.p(yy, x, if sel { "›" } else { " " }, bold());
             c.p(yy, x + 2, DOT, status_style(&s.status));
-            let name = format!("{:<w$}", take(&s.name, name_w), w = name_w);
+            let label = if s.tool == "claude" { s.name.clone() } else { format!("{} · {}", s.name, s.tool_label) };
+            let name = format!("{:<w$}", take(&label, name_w), w = name_w);
             c.put(yy, x + 4, &name, if sel { bold().add_modifier(Modifier::REVERSED) } else { Style::default() }, Some(name_w));
             let tx = x + 5 + name_w as u16; // fixed 5-column tag area: "bg ◆ "
             if s.bg {
@@ -491,7 +494,9 @@ impl Hub {
         c.p(y, x, &s.name, bold());
         let model = act.model.clone().unwrap_or_default().replace("claude-", "");
         let ident = if s.bg { s.short.clone().map(|i| format!("bg {i}")) } else { s.pid.map(|p| format!("pid {p}")) };
-        let line1: Vec<String> = [Some(s.tool.clone()), (!model.is_empty()).then_some(model), ident].into_iter().flatten().collect();
+        let model = if model.is_empty() { s.model.clone().unwrap_or_default() } else { model };
+        let agent = if s.surface == "CLI" { s.tool_label.clone() } else { format!("{} {}", s.tool_label, s.surface) };
+        let line1: Vec<String> = [Some(agent), (!model.is_empty()).then_some(model), ident].into_iter().flatten().collect();
         c.p(y + 1, x, &line1.join("  ·  "), dim());
         let mut where_ = vec![if s.cwd.is_empty() { "?".into() } else { util::short(&s.cwd) }];
         if let Some(g) = sessions::git(&s.cwd) {
@@ -842,6 +847,7 @@ impl Hub {
             ("t", Some("type your own answer")),
             ("o", Some("jump to its terminal (or attach, for background sessions)")),
             ("a / A", Some("auto-yes for this session / for every session")),
+            ("p", Some("send it a prompt (typed in if it runs under grandaddy run, iTerm or tmux)")),
             ("x x", Some("stop a background session")),
             ("s", Some("start a new background session, optionally in a new worktree")),
             ("VIEWS", None),
@@ -1011,6 +1017,16 @@ impl Hub {
                 };
                 self.background("starting a background session", move || launch::new(&folder, &prompt, wt.as_deref(), None));
             }
+            Purpose::Prompt(key) => {
+                if !text.is_empty() {
+                    if let Some(s) = self.sess.iter().find(|s| s.key == key).cloned() {
+                        self.background("sending", move || match prompt::send(&s, &text, false) {
+                            Ok(d) => (true, d.message),
+                            Err(e) => (false, e),
+                        });
+                    }
+                }
+            }
             Purpose::Answer(rid) => {
                 if !text.is_empty() {
                     if let Some(req) = self.sess.iter().flat_map(|s| s.pending.iter()).find(|r| r.id == rid).cloned() {
@@ -1112,6 +1128,10 @@ impl Hub {
                 } else if let Some(pid) = s.pid {
                     self.background("finding its terminal", move || launch::jump(pid));
                 }
+            }
+            KeyCode::Char('p') => {
+                let label = format!("message {}: ", s.name);
+                self.start_ask(&label, "", Purpose::Prompt(s.key.clone()));
             }
             KeyCode::Char('x') => match (s.bg, s.short.clone()) {
                 (true, Some(id)) => {

@@ -1,6 +1,7 @@
 //! One list of sessions across tools, in the single shape the CLI, hub and app all use.
 use crate::claude::{self, Activity, Request};
-use crate::others;
+use crate::managed;
+use crate::providers::{self, Answer};
 use crate::util::{self, now};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -11,7 +12,12 @@ use std::sync::Mutex;
 #[derive(Debug, Clone, Serialize)]
 pub struct Session {
     pub key: String,
+    /// tool id: claude, codex, antigravity, cursor, gemini, opencode, kilo, …
     pub tool: String,
+    /// "Claude Code", "Codex", …
+    pub tool_label: String,
+    /// CLI, IDE or app
+    pub surface: String,
     pub pid: Option<i64>,
     pub sid: Option<String>,
     /// background session id (what `claude attach` takes)
@@ -27,70 +33,115 @@ pub struct Session {
     pub auto: bool,
     pub pending: Vec<Request>,
     pub transcript: Option<PathBuf>,
+    /// where a non-Claude-CLI session's activity is read from
+    pub source: Option<String>,
+    pub model: Option<String>,
+    /// what grandaddy can answer for it: full, permissions or none
+    pub answer: Answer,
     pub can_answer: bool,
+    /// set when the session runs under `grandaddy run`, so prompts can be typed into it
+    pub managed: Option<String>,
+    /// stopped on a usage limit: when it lifts, and what grandaddy will do then
+    pub limit: Option<crate::claude::Limit>,
+    pub limit_plan: Option<String>,
 }
 
-/// Every live session: Claude Code first (full detail), then other CLIs.
+/// Every live session across tools: the Claude Code CLI first, then everything else.
 pub fn collect() -> Vec<Session> {
     let auto = util::auto_ids();
     let reqs = claude::pending();
-    let mut out = vec![];
-    for s in claude::live() {
+    let runs = managed::list();
+    let mut out: Vec<Session> = vec![];
+    let t0 = std::time::Instant::now();
+    let live = claude::live();
+    if std::env::var_os("GRANDADDY_TIMING").is_some() {
+        eprintln!("  {:<12} {:>5} ms", "claude cli", t0.elapsed().as_millis());
+    }
+    for s in live {
         let g = |k: &str| s.get(k).and_then(|v| v.as_str()).map(String::from);
         let f = |k: &str| s.get(k).and_then(|v| v.as_f64());
         let Some(sid) = g("sessionId") else { continue };
-        let mine: Vec<Request> = reqs.iter().filter(|r| r.sid == sid).cloned().collect();
         let raw = g("status").or_else(|| g("state"));
         let kind = g("kind").unwrap_or_else(|| "interactive".into());
-        let status = if !mine.is_empty() { "needs you".to_string() } else { claude::status_word(raw.as_deref().unwrap_or("")) };
         out.push(Session {
             key: format!("claude:{sid}"),
             tool: "claude".into(),
+            tool_label: "Claude Code".into(),
+            surface: if g("entrypoint").as_deref() == Some("claude-desktop") { "app".into() } else { "CLI".into() },
             pid: s.get("pid").and_then(|v| v.as_i64()),
             short: g("id"),
             name: g("name").unwrap_or_else(|| sid.chars().take(8).collect()),
             cwd: g("cwd").unwrap_or_default(),
             bg: kind == "background",
             kind,
+            status: claude::status_word(raw.as_deref().unwrap_or("")),
             raw,
-            status,
             since: f("statusUpdatedAt").or_else(|| f("startedAt")).unwrap_or(0.0) / 1000.0,
             started: f("startedAt").unwrap_or(0.0) / 1000.0,
-            auto: auto.contains(&sid) || auto.contains(util::ALL),
-            pending: mine,
+            auto: false,
+            pending: vec![],
             transcript: claude::transcript(&sid),
+            source: None,
+            model: None,
+            answer: Answer::Full,
             can_answer: true,
+            managed: None,
+            limit: None,
+            limit_plan: None,
             sid: Some(sid),
         });
     }
-    for p in others::processes() {
-        let (mut state, mut rollout) = (None, None);
-        if p.tool == "codex" {
-            rollout = others::codex_rollout(&p.cwd, p.started);
-            if let Some(r) = &rollout {
-                state = others::codex_activity(r).1;
-            }
+    let seen: HashSet<String> = out.iter().filter_map(|s| s.sid.clone()).collect();
+    for f in providers::all() {
+        if f.sid.as_ref().map(|s| seen.contains(s)).unwrap_or(false) {
+            continue; // the Claude app's session is already listed from the CLI side
         }
-        let base = Path::new(p.cwd.trim_end_matches('/')).file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "?".into());
         out.push(Session {
-            key: format!("{}:{}", p.tool, p.pid),
-            name: format!("{} · {}", p.tool, base),
-            tool: p.tool,
-            pid: Some(p.pid),
-            sid: None,
+            key: f.key,
+            tool_label: providers::label(f.tool).into(),
+            tool: f.tool.into(),
+            surface: f.surface.into(),
+            pid: f.pid,
+            sid: f.sid,
             short: None,
-            cwd: p.cwd,
+            name: f.name,
+            cwd: f.cwd,
             kind: "interactive".into(),
             bg: false,
-            status: state.clone().unwrap_or_else(|| "running".into()),
-            raw: state,
-            since: p.started,
-            started: p.started,
+            raw: Some(f.status.clone()),
+            status: f.status,
+            since: f.since,
+            started: f.started,
             auto: false,
             pending: vec![],
-            transcript: rollout,
-            can_answer: false,
+            transcript: f.source.as_ref().filter(|s| !s.contains('|') && s.starts_with('/')).map(PathBuf::from),
+            source: f.source,
+            model: f.model,
+            can_answer: f.answer != Answer::None,
+            answer: f.answer,
+            managed: None,
+            limit: None,
+            limit_plan: None,
         });
+    }
+    for s in out.iter_mut() {
+        if let Some(sid) = &s.sid {
+            s.pending = reqs.iter().filter(|r| &r.sid == sid).cloned().collect();
+            s.auto = auto.contains(sid) || auto.contains(util::ALL);
+        }
+        if !s.pending.is_empty() {
+            s.status = "needs you".into();
+        }
+        s.managed = managed::match_session(&runs, s.pid, &s.tool, &s.cwd);
+        if s.status != "needs you" {
+            if let Some(l) = crate::limits::of(s) {
+                if l.resets_at.map(|r| r > util::now() - crate::limits::GRACE * 4.0).unwrap_or(true) {
+                    s.limit_plan = Some(crate::limits::plan(s, &l));
+                    s.status = "limit".into();
+                    s.limit = Some(l);
+                }
+            }
+        }
     }
     // flags for sessions that have exited are just clutter
     let live: HashSet<String> = out.iter().filter_map(|s| s.sid.clone()).collect();
@@ -101,12 +152,14 @@ pub fn collect() -> Vec<Session> {
 }
 
 pub fn activity(s: &Session) -> Activity {
-    match (&s.transcript, s.tool.as_str()) {
-        (Some(p), "claude") => claude::activity(p),
-        (Some(p), _) => others::codex_activity(p).0,
-        _ => Activity::default(),
+    if s.tool == "claude" {
+        return s.transcript.as_ref().map(|p| claude::activity(p)).unwrap_or_default();
     }
+    s.source.as_ref().map(|src| providers::activity(&s.tool, src)).unwrap_or_default()
 }
+
+/// Tools whose activity is cheap to re-read (cached file parses), used for conflict checks.
+const FILE_BACKED: &[&str] = &["claude", "codex", "antigravity", "gemini", "qwen"];
 
 /// Files this session edited recently that another live session edited too: {path: [names]}.
 pub fn conflicts(s: &Session, everyone: &[Session]) -> BTreeMap<String, Vec<String>> {
@@ -117,7 +170,7 @@ pub fn conflicts(s: &Session, everyone: &[Session]) -> BTreeMap<String, Vec<Stri
     if mine.is_empty() {
         return out;
     }
-    for o in everyone.iter().filter(|o| o.key != s.key && o.tool == "claude") {
+    for o in everyone.iter().filter(|o| o.key != s.key && FILE_BACKED.contains(&o.tool.as_str())) {
         for f in recent(&activity(o)).keys() {
             if mine.contains_key(f) {
                 out.entry(f.clone()).or_default().push(o.name.clone());

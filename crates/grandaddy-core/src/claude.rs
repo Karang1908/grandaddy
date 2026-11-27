@@ -216,6 +216,21 @@ pub struct Activity {
     pub mtime: Option<f64>,
     /// file path -> when it was last edited
     pub edited: BTreeMap<String, f64>,
+    /// set when the newest thing in the session is a usage-limit stop
+    pub limit: Option<Limit>,
+}
+
+/// A session stopped by a plan's usage limit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Limit {
+    /// five_hour | seven_day | session | usage
+    pub kind: String,
+    /// when it lifts (epoch seconds), if known
+    pub resets_at: Option<f64>,
+    /// the agent's own words, e.g. "You've hit your 5-hour limit · resets 4:30am (Asia/Dubai)"
+    pub text: String,
+    /// when the session hit it
+    pub at: f64,
 }
 
 /// transcript -> ((mtime, size) it was parsed at, result)
@@ -256,6 +271,7 @@ pub fn activity(path: &Path) -> Activity {
                 match c.get("type").and_then(|v| v.as_str()) {
                     Some("text") => {
                         if let Some(u) = user_text(c.get("text").and_then(|v| v.as_str()).unwrap_or("")) {
+                            act.limit = None; // you've written since; a new limit hit would set it again
                             events.push(Event::new("you", u, ts));
                         }
                     }
@@ -270,8 +286,21 @@ pub fn activity(path: &Path) -> Activity {
                     _ => {}
                 }
             }
+        } else if t == "assistant" && d.get("error").and_then(|v| v.as_str()) == Some("rate_limit") {
+            let text = match &content {
+                Value::Array(a) => a.iter().filter_map(|x| x.get("text").and_then(|v| v.as_str())).collect::<Vec<_>>().join(" "),
+                Value::String(s) => s.clone(),
+                _ => String::new(),
+            };
+            let q = d.get("quotaLimits").or_else(|| d.pointer("/apiErrorParams/rate_limit_info"));
+            let at = ts.unwrap_or_else(now);
+            let resets_at = q.and_then(|q| q.get("resetsAt")).and_then(|v| v.as_f64()).or_else(|| crate::limits::parse_reset(&text, at));
+            let kind = q.and_then(|q| q.get("rateLimitType")).and_then(|v| v.as_str()).map(String::from).unwrap_or_else(|| crate::limits::kind_from_text(&text));
+            events.push(Event::new("limit", text.clone(), ts));
+            act.limit = Some(Limit { kind, resets_at, text, at });
         } else if t == "assistant" {
             let Value::Array(items) = content else { continue };
+            act.limit = None; // it's working again
             if let Some(m) = msg.get("model").and_then(|v| v.as_str()) {
                 act.model = Some(m.to_string());
             }
@@ -568,6 +597,13 @@ pub struct Request {
     pub cwd: Option<String>,
     pub created: f64,
     pub hook_pid: i64,
+    /// which agent asked: claude, codex, antigravity, cursor, gemini
+    #[serde(default = "claude_agent")]
+    pub agent: String,
+}
+
+fn claude_agent() -> String {
+    "claude".into()
 }
 
 impl Request {
