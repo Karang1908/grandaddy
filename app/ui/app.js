@@ -162,7 +162,7 @@ async function refreshSessions() {
   if (S.sel && !S.sessions.some((s) => s.key === S.sel)) S.sel = null;
   if (!S.sel && S.sessions.length) {
     const by = (st) => S.sessions.find((s) => s.status === st);
-    S.sel = (by("needs you") || by("working") || by("limit") || by("idle") || S.sessions[0]).key;
+    S.sel = (by("needs you") || S.sessions.find((s) => s.question) || by("working") || by("limit") || by("idle") || S.sessions[0]).key;
   }
 }
 async function refreshDetail() {
@@ -250,11 +250,11 @@ function renderSidebar() {
   const list = S.sessions.filter((s) => !q || `${s.name} ${s.folder} ${s.tool_label}`.toLowerCase().includes(q));
   let html = "";
   for (const [st, title] of GROUPS) {
-    const rows = list.filter((s) => s.status === st);
+    const rows = list.filter((s) => shown(s) === st);
     if (!rows.length) continue;
     html += `<div class="section-title"><span>${title}</span><span class="count">${rows.length}</span></div>` + rows.map(srow).join("");
   }
-  const other = list.filter((s) => !GROUPS.some(([g]) => g === s.status));
+  const other = list.filter((s) => !GROUPS.some(([g]) => g === shown(s)));
   if (other.length) html += `<div class="section-title"><span>Other</span></div>` + other.map(srow).join("");
   if (!html) html = `<div class="empty-side">${q ? "No sessions match." : "No sessions running."}</div>`;
   if ($("#groups").innerHTML !== html) $("#groups").innerHTML = html;
@@ -264,17 +264,21 @@ function srow(s) {
   const agent = s.tool === "claude" && s.surface === "CLI" ? "" : s.surface === "CLI" ? s.tool_label : `${s.tool_label} ${s.surface}`;
   let meta = [agent, s.folder].filter(Boolean).join(" · ");
   if (s.status === "limit" && s.limit && s.limit.resets_at) meta = `Resets ${when(s.limit.resets_at)}${agent ? " · " + agent : ""}`;
-  return `<button class="srow ${S.view === "sessions" && s.key === S.sel ? "sel" : ""}" data-key="${esc(s.key)}">
-    ${statusGlyph(s.status)}<span class="name">${esc(s.name)}</span>
+  if (s.question && s.status === "idle") meta = `Waiting for your reply${agent ? " · " + agent : ""}`;
+  const waiting = shown(s) === "needs you";
+  return `<button class="srow ${S.view === "sessions" && s.key === S.sel ? "sel" : ""} ${waiting ? "waiting" : ""}" data-key="${esc(s.key)}">
+    ${statusGlyph(shown(s))}<span class="name">${esc(s.name)}</span>
     <span class="when">${esc(s.ago)}</span><span class="meta">${esc(meta)}</span></button>`;
 }
 const selected = () => S.sessions.find((s) => s.key === S.sel);
+/** Where a session belongs in the sidebar: one that ended its turn with a question needs you. */
+const shown = (s) => (s.question && s.status === "idle" ? "needs you" : s.status);
 
 function renderToolbar() {
   const s = S.view === "sessions" ? selected() : null;
   let title = "", sub = "";
   if (s) {
-    const st = { "needs you": "needs you", limit: "paused by a usage limit" }[s.status] || s.status;
+    const st = s.question && s.status === "idle" ? "waiting for your reply" : { "needs you": "needs you", limit: "paused by a usage limit" }[s.status] || s.status;
     title = s.name;
     sub = [s.tool_label + (s.surface !== "CLI" ? ` ${s.surface}` : ""), st].join(" · ");
   } else if (S.view === "sessions") title = "Grandaddy";
@@ -356,6 +360,9 @@ function activityPane(s) {
   let h = `<div class="page"><div class="facts selectable">${facts.map(([i, t]) => `<span class="fact">${i}${esc(t)}</span>`).join("")}${s.auto ? '<span class="tag green">Auto-yes on</span>' : ""}</div>`;
 
   if (s.limit) h += limitCard(s);
+  if (s.question && s.status === "idle" && !(s.pending || []).length) {
+    h += `<div class="reply-banner">${statusGlyph("needs you")}<div class="grow"><div class="t">Waiting for your reply</div><div class="s">It ended its turn with a question. Answer it below.</div></div><button class="btn default small" data-act="reply">Reply</button></div>`;
+  }
   const notices = [];
   for (const sig of d.signals || []) notices.push(sig === "looping?" ? "The last few steps were identical. It may be stuck in a loop." : `No output for ${sig.replace("quiet ", "")}.`);
   const files = Object.entries(d.conflicts || {});
@@ -755,14 +762,14 @@ function settingsPane() {
   let h = `<div class="page"><h1 class="page-title">Settings</h1>`;
 
   h += `<h2 class="group-title">Power</h2><div class="group">
-    <div class="cell"><div class="grow"><div class="t">Keep the Mac awake while sessions work</div><div class="s">${aw.holding ? "Holding it awake now. The display still sleeps." : "Everything else sleeps as usual, and the Mac sleeps once every session is idle."}</div></div>${sw('data-act="awake"', st.awake ? aw.enabled : true)}</div>
-    <div class="cell" style="display:block;padding-bottom:0"><div class="t">When the lid closes</div><div class="s">Only while sessions are working. Keep the Mac somewhere it can breathe, not in a bag.</div></div>
+    <div class="cell"><div class="grow"><div class="t">Keep the Mac awake while agents need it</div><div class="s">${(aw.reasons || []).length ? `Holding it awake: ${esc(aw.reasons.join(", "))}. The display still sleeps.` : "Nothing needs it right now, so it sleeps as usual."}</div></div>${sw('data-act="awake"', st.awake ? aw.enabled : true)}</div>
+    <div class="cell" style="display:block;padding-bottom:0"><div class="t">When the lid closes</div><div class="s">Applies while agents need the Mac: working, waiting on you, due to continue after a limit, or a loop due within the hour. Keep it somewhere it can breathe, not in a bag.</div></div>
     <div class="choices">
       ${[["sleep", "Sleep", "The Mac sleeps, as usual."], ["full", "Keep everything on", "The whole Mac keeps running."], ["agents", "Agents only", "Display off, other apps paused, sound muted, Low Power Mode. All undone when you open it."]]
         .map(([v, t, d]) => `<button class="choice ${mode === v ? "on" : ""}" data-act="lid" data-mode="${v}"><b>${t}</b><span>${d}</span></button>`).join("")}
     </div>`;
   if (mode !== "sleep" && aw.lid_active !== undefined) {
-    const state = aw.agents_only_active ? `Lid closed · ${aw.frozen.length} app${aw.frozen.length === 1 ? "" : "s"} paused` : aw.lid_active ? "Ready: sessions are working" : "Waiting for a session to start working";
+    const state = aw.agents_only_active ? `Lid closed · ${aw.frozen.length} app${aw.frozen.length === 1 ? "" : "s"} paused` : aw.lid_active ? "Closing the lid now keeps it running." : "Nothing needs the Mac right now, so closing the lid would sleep it.";
     h += `<div class="cell"><div class="grow"><div class="s">${esc(state)}${(mode === "full" ? aw.lid_helper : aw.agents_helper) ? "" : " · needs your password once, the first time it's chosen"}</div></div></div>`;
   }
   if (mode === "agents") {
@@ -955,6 +962,7 @@ $("#pane").addEventListener("click", async (e) => {
     case "more": S.open[el.dataset.id] = true; return repaint();
     case "goto": return select(el.dataset.key);
     case "goto-settings": return openView("settings");
+    case "reply": { const c = $("#composer-text"); c.focus(); $("#composer .composer-field").classList.add("pulse"); setTimeout(() => $("#composer .composer-field")?.classList.remove("pulse"), 1200); return; }
     case "url": return run(invoke("open_url", { url: el.dataset.url }), "Opened in your browser");
     case "continue-skip": {
       await run(invoke("set_continue_skip", { key: el.dataset.key, skip: el.dataset.skip === "1" }), el.dataset.skip === "1" ? "This session won't be continued" : "This session will be continued");

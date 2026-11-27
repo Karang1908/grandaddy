@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Grandaddy</title>
+  <link rel="stylesheet" href="styles.css">
+  <style>
+    /* A floating card over your other windows: whatever an agent is waiting on, one at a time. */
+    html, body { background: transparent; height: 100%; }
+    body { padding: 0; display: flex; flex-direction: column; }
+    .card { flex: 1; display: flex; flex-direction: column; min-height: 0; margin: 0; border-radius: 20px; overflow: hidden;
+      background: var(--sheen), var(--glass-strong); }
+    .head { display: flex; align-items: center; gap: 9px; padding: 14px 14px 10px 16px; }
+    .head img { width: 28px; height: 28px; }
+    .head .who { flex: 1; min-width: 0; }
+    .head .t { font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .head .s { font-size: 11.5px; color: var(--label-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pager { display: flex; align-items: center; gap: 2px; font-size: 11.5px; color: var(--label-2); font-variant-numeric: tabular-nums; }
+    .pager .tool { width: 24px; height: 24px; }
+    .pager .tool svg { width: 12px; height: 12px; }
+    .body { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 16px 12px; }
+    .ask-kind { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; margin-bottom: 9px; color: var(--orange-t); }
+    .ask-kind svg { width: 15px; height: 15px; }
+    pre.cmd { margin: 0; padding: 10px 12px; border-radius: 12px; background: var(--code); font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow: auto; }
+    .why { margin-top: 8px; color: var(--label-2); font-size: 12.5px; }
+    .msg { max-height: 260px; overflow: auto; padding: 10px 12px; border-radius: 12px; background: var(--fill); font-size: 13px; line-height: 1.5; }
+    .q { padding: 0 0 10px; }
+    .q .qtext { font-weight: 600; margin-bottom: 8px; }
+    textarea.reply { width: 100%; margin-top: 10px; min-height: 64px; max-height: 160px; }
+    .own { width: 100%; margin-top: 2px; }
+    .foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px 14px; }
+    .foot .note { flex: 1; font-size: 11.5px; color: var(--label-2); min-width: 0; }
+  </style>
+</head>
+<body>
+  <div class="card glass" id="card">
+    <div class="head">
+      <img src="assets/icon.png" alt="">
+      <div class="who"><div class="t" id="who">Grandaddy</div><div class="s" id="sub"></div></div>
+      <div class="pager" id="pager"></div>
+    </div>
+    <div class="body" id="body"></div>
+    <div class="foot" id="foot"></div>
+  </div>
+  <script src="markdown.js"></script>
+  <script>
+  "use strict";
+  const APP_ONLY = new Set(["show_main", "hide_quick", "hide_ask", "resize_ask", "quit", "ui_log", "debug"]);
+  const invoke = (cmd, args = {}) => (APP_ONLY.has(cmd) ? window.__TAURI__.core.invoke(cmd, args) : window.__TAURI__.core.invoke("call", { cmd, args }));
+  const $ = (s) => document.querySelector(s);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const G = {
+    needs: '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="currentColor" stroke="none"/><path d="M8 4.4v4.2" stroke="#fff" stroke-width="1.8"/><circle cx="8" cy="11.3" r="1" fill="#fff" stroke="none"/></svg>',
+    left: '<svg viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5"/></svg>',
+    right: '<svg viewBox="0 0 16 16"><path d="m6 3.5 4.5 4.5L6 12.5"/></svg>',
+  };
+
+  let sessions = [], idx = 0, current = null;
+  const dismissed = new Set();
+  const picks = {}, own = {}, drafts = {};
+
+  /** Everything waiting on you, oldest first: permission prompts, questions, and replies. */
+  function queue() {
+    const items = [];
+    for (const s of sessions) {
+      for (const r of s.pending || []) items.push({ id: r.id, s, kind: r.tool === "AskUserQuestion" ? "question" : "permission", r, at: r.created });
+      if (s.question && !(s.pending || []).length) items.push({ id: s.question.id, s, kind: "reply", q: s.question, at: s.question.at });
+    }
+    return items.filter((i) => !dismissed.has(i.id)).sort((a, b) => a.at - b.at);
+  }
+  const reqTitle = (r) => r.tool === "Bash" ? "Wants to run" : ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(r.tool) ? "Wants to change a file"
+    : r.tool === "ExitPlanMode" ? "Has a plan for you" : r.tool.startsWith("mcp__") ? `Wants to use ${r.tool.split("__").slice(1).join(" › ")}` : `Wants to use ${r.tool}`;
+  const reqText = (r) => { const i = r.input || {}; return r.tool === "Bash" ? i.command || "" : i.file_path || i.url || i.plan || JSON.stringify(i, null, 2); };
+
+  function render() {
+    const a = document.activeElement;
+    if (a && a.matches("textarea, input") && current && queue().some((i) => i.id === current.id)) return; // never redraw under typing
+    const q = queue();
+    if (!q.length) { current = null; invoke("hide_ask"); return; }
+    idx = Math.min(idx, q.length - 1);
+    const it = (current = q[idx]);
+    const s = it.s;
+    $("#who").textContent = s.name;
+    $("#sub").textContent = `${s.tool_label}${s.surface !== "CLI" ? " " + s.surface : ""} · ${s.folder}`;
+    $("#pager").innerHTML = q.length > 1 ? `<button class="tool" data-nav="-1" ${idx === 0 ? "disabled" : ""}>${G.left}</button>${idx + 1} of ${q.length}<button class="tool" data-nav="1" ${idx === q.length - 1 ? "disabled" : ""}>${G.right}</button>` : "";
+    let body = "", foot = "";
+    if (it.kind === "permission") {
+      const r = it.r;
+      body = `<div class="ask-kind">${G.needs}${esc(reqTitle(r))}</div>` + (r.tool === "ExitPlanMode" ? `<div class="msg md selectable">${window.markdown(reqText(r))}</div>` : `<pre class="cmd selectable">${esc(reqText(r))}</pre>`) +
+        (r.input && r.input.description ? `<div class="why">${esc(r.input.description)}</div>` : "");
+      foot = `<span class="note"></span><button class="btn" data-act="later">Later</button><button class="btn" data-act="deny">Deny</button><button class="btn default" data-act="allow">Allow</button>`;
+    } else if (it.kind === "question") {
+      const qs = (it.r.input && it.r.input.questions) || [];
+      body = `<div class="ask-kind">${G.needs}${qs.length > 1 ? `${qs.length} questions` : "A question"}</div>` + qs.map((q, qi) => {
+        const p = picks[it.id + ":" + qi] || [];
+        return `<div class="q"><div class="qtext selectable">${esc(q.question)}</div>` + (q.options || []).map((o, oi) =>
+          `<button class="opt ${q.multiSelect ? "multi" : ""} ${p.includes(oi) ? "on" : ""}" data-q="${qi}" data-o="${oi}"><span class="radio"></span><span>${esc(o.label)}${o.description ? `<span class="od">${esc(o.description)}</span>` : ""}</span></button>`).join("") +
+          `<input class="own" data-own="${qi}" placeholder="Or answer in your own words" value="${esc(own[it.id + ":" + qi] || "")}"></div>`;
+      }).join("");
+      const ready = qs.every((_, qi) => (picks[it.id + ":" + qi] || []).length || (own[it.id + ":" + qi] || "").trim());
+      foot = `<span class="note"></span><button class="btn" data-act="later">Later</button><button class="btn default" data-act="answer" ${ready ? "" : "disabled"}>${qs.length > 1 ? "Send Answers" : "Send Answer"}</button>`;
+    } else {
+      body = `<div class="ask-kind">${G.needs}Waiting for your reply</div><div class="msg md selectable">${window.markdown(it.q.text)}</div>
+        <textarea class="reply" id="reply" placeholder="Reply to ${esc(s.name)}">${esc(drafts[it.id] || "")}</textarea>`;
+      foot = `<span class="note"></span><button class="btn" data-act="open">Open</button><button class="btn" data-act="later">Later</button><button class="btn default" data-act="send" ${(drafts[it.id] || "").trim() ? "" : "disabled"}>Send</button>`;
+    }
+    $("#body").innerHTML = body;
+    $("#foot").innerHTML = foot;
+    fit();
+    const msg = $("#body .msg");
+    if (msg && it.kind === "reply") msg.scrollTop = msg.scrollHeight; // the question is at the end
+  }
+
+  /** Size the window to what it shows, so a short prompt isn't a tall empty card. */
+  let lastH = 0;
+  function fit() {
+    // measure the content at its natural height, not the box that stretches to fill the window
+    const b = $("#body");
+    b.style.flex = "none"; b.style.height = "auto";
+    const bodyH = b.scrollHeight;
+    b.style.flex = ""; b.style.height = "";
+    const h = Math.round(Math.min(640, Math.max(200, $(".head").offsetHeight + bodyH + $("#foot").offsetHeight + 4)));
+    if (Math.abs(h - lastH) > 4) { lastH = h; invoke("resize_ask", { h }).catch(() => {}); }
+  }
+  async function refresh() {
+    try { sessions = await invoke("list_sessions"); } catch { return; }
+    render();
+  }
+  window.ask = { refresh };
+
+  function note(m, err) { const n = $("#foot .note"); if (n) { n.textContent = m; n.style.color = err ? "var(--red-t)" : ""; } }
+  async function run(btn, p, okNext = true) {
+    btn.classList.add("busy");
+    try {
+      const r = await p;
+      if (okNext) { dismissed.add(current.id); idx = Math.max(0, idx); }
+      await refresh();
+      return r;
+    } catch (e) { note(String(e), true); } finally { btn.classList.remove("busy"); }
+  }
+
+  document.addEventListener("click", async (e) => {
+    const nav = e.target.closest("[data-nav]");
+    if (nav) { idx += +nav.dataset.nav; current = null; return render(); }
+    const opt = e.target.closest(".opt");
+    if (opt && current) {
+      const k = current.id + ":" + opt.dataset.q, o = +opt.dataset.o;
+      const multi = opt.classList.contains("multi");
+      const cur = picks[k] || [];
+      picks[k] = multi ? (cur.includes(o) ? cur.filter((x) => x !== o) : [...cur, o]) : [o];
+      own[k] = "";
+      document.activeElement && document.activeElement.blur();
+      return render();
+    }
+    const b = e.target.closest("[data-act]");
+    if (!b || !current) return;
+    const it = current, s = it.s;
+    switch (b.dataset.act) {
+      case "later": dismissed.add(it.id); current = null; return render();
+      case "open": return invoke("show_main", { key: s.key });
+      case "allow": case "deny": return run(b, invoke("decide", { rid: it.r.id, allow: b.dataset.act === "allow" }));
+      case "answer": {
+        const answers = {};
+        it.r.input.questions.forEach((q, qi) => {
+          const o = (own[it.id + ":" + qi] || "").trim();
+          answers[q.question] = o || (picks[it.id + ":" + qi] || []).map((i) => q.options[i].label).join(", ");
+        });
+        return run(b, invoke("answer", { rid: it.r.id, answers }));
+      }
+      case "send": {
+        const text = (drafts[it.id] || "").trim();
+        if (!text) return;
+        const r = await run(b, s.bg && s.sid ? invoke("resume_session", { sid: s.sid, cwd: s.cwd, prompt: text }) : invoke("send_prompt", { key: s.key, text, focus: false }));
+        if (r) delete drafts[it.id];
+        if (r && r.how === "clipboard") invoke("ui_log", { level: "info", msg: "reply copied for " + s.name });
+        return;
+      }
+    }
+  });
+  document.addEventListener("input", (e) => {
+    if (!current) return;
+    if (e.target.id === "reply") {
+      drafts[current.id] = e.target.value;
+      const send = $('[data-act="send"]');
+      if (send) send.disabled = !e.target.value.trim();
+    }
+    if (e.target.dataset.own !== undefined) {
+      const k = current.id + ":" + e.target.dataset.own;
+      own[k] = e.target.value;
+      if (e.target.value.trim()) picks[k] = [];
+      const qs = current.r.input.questions;
+      const ready = qs.every((_, qi) => (picks[current.id + ":" + qi] || []).length || (own[current.id + ":" + qi] || "").trim());
+      const btn = $('[data-act="answer"]');
+      if (btn) btn.disabled = !ready;
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { invoke("hide_ask"); return; }
+    if (e.key === "Enter" && (e.metaKey || (e.target.id !== "reply"))) {
+      const primary = $("#foot .btn.default:not(:disabled)");
+      if (primary && (e.metaKey || e.target.tagName === "INPUT")) { e.preventDefault(); primary.click(); }
+    }
+  });
+  refresh();
+  setInterval(() => { if (document.visibilityState === "visible") refresh(); }, 2000);
+  </script>
+</body>
+</html>

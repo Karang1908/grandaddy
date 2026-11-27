@@ -22,7 +22,35 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
 const SUDOERS: &str = "/etc/sudoers.d/grandaddy-pmset";
-const IDLE_GRACE: f64 = 120.0;
+/// After the last reason to stay awake goes away, hold on this long before letting the Mac sleep.
+const IDLE_GRACE: f64 = 600.0;
+
+/// Why the Mac should stay awake right now: anything an agent is doing or waiting on that needs
+/// the Mac running to carry on. Empty means it can sleep.
+pub fn reasons(live: &[Session]) -> Vec<String> {
+    let mut out = vec![];
+    let n = |k: usize, one: &str, many: &str| if k == 1 { one.to_string() } else { format!("{k} {many}") };
+    let working = live.iter().filter(|s| s.status == "working").count();
+    if working > 0 {
+        out.push(n(working, "a session is working", "sessions working"));
+    }
+    // answers can still arrive from your phone, and the hook has to be awake to pass them on
+    let waiting = live.iter().filter(|s| !s.pending.is_empty()).count();
+    if waiting > 0 {
+        out.push(n(waiting, "a session is waiting on you", "sessions waiting on you"));
+    }
+    if config::load().auto_continue.enabled {
+        let limited = live.iter().filter(|s| s.limit.as_ref().and_then(|l| l.resets_at).is_some() && !crate::limits::skipped(&s.key)).count();
+        if limited > 0 {
+            out.push(n(limited, "a session continues when its limit resets", "sessions continue when their limits reset"));
+        }
+    }
+    let due = crate::loops::list().into_iter().filter(|l| l.enabled && l.next_run - now() < 3600.0).count();
+    if due > 0 {
+        out.push(n(due, "a loop runs within the hour", "loops run within the hour"));
+    }
+    out
+}
 
 fn dir() -> PathBuf {
     util::state().join("awake")
@@ -176,6 +204,8 @@ pub fn preview(live: &[Session]) -> (Vec<String>, Vec<(String, &'static str)>) {
 
 #[derive(Default)]
 pub struct Keeper {
+    reasons: Vec<String>,
+    last_lid: Option<bool>,
     caffeinate: Option<Child>,
     lid_hold: bool,
     lid_actions: bool,
@@ -187,6 +217,10 @@ pub struct Keeper {
 pub struct Status {
     pub enabled: bool,
     pub holding: bool,
+    /// why it's holding, in words (empty: nothing needs the Mac)
+    pub reasons: Vec<String>,
+    /// the lid is shut right now
+    pub lid_closed: bool,
     /// sleep | full | agents
     pub lid_mode: String,
     pub lid_helper: bool,
@@ -259,7 +293,9 @@ impl Keeper {
     /// Call every few seconds with the live sessions.
     pub fn update(&mut self, live: &[Session]) {
         let cfg = config::load().awake;
-        let working = live.iter().any(|s| s.status == "working");
+        let why = reasons(live);
+        let working = !why.is_empty();
+        self.reasons = why;
         if let Some(c) = self.caffeinate.as_mut() {
             if c.try_wait().ok().flatten().is_some() {
                 self.caffeinate = None;
@@ -291,7 +327,16 @@ impl Keeper {
             }
         }
 
-        let closed = self.lid_hold && lid_closed();
+        let shut = lid_closed();
+        if self.last_lid.is_some() && self.last_lid != Some(shut) {
+            util::log(&if shut {
+                if self.lid_hold { format!("lid closed: kept awake ({mode}) because {}", self.reasons.join(", ")) } else { "lid closed: nothing needs the Mac, so it sleeps".to_string() }
+            } else {
+                "lid opened".to_string()
+            });
+        }
+        self.last_lid = Some(shut);
+        let closed = self.lid_hold && shut;
         let want_actions = closed && mode == "agents";
         if want_actions && !self.lid_actions {
             self.apply_agents_only(live, &cfg.keep);
@@ -316,6 +361,7 @@ impl Keeper {
             if sudo_pmset(&["-a", "disablesleep", "0"]) {
                 util::remove(&mark("sleep-disabled"));
                 self.lid_hold = false;
+                util::log("nothing needs the Mac any more: closing the lid sleeps it again");
             }
         }
     }
@@ -380,6 +426,8 @@ impl Keeper {
         Status {
             enabled: cfg.enabled,
             holding: self.caffeinate.is_some(),
+            reasons: self.reasons.clone(),
+            lid_closed: lid_closed(),
             lid_mode: cfg.lid_mode().to_string(),
             lid_helper: lid_helper_installed(),
             agents_helper: agents_helper_installed(),

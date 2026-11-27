@@ -485,6 +485,35 @@ fn open_url(url: String) -> Res<()> {
     Ok(())
 }
 
+/// The popup sizes itself to what it shows; it keeps its top edge where it is.
+#[tauri::command]
+fn resize_ask(app: AppHandle, h: f64) {
+    if let Some(w) = app.get_webview_window("ask") {
+        let _ = w.set_size(tauri::LogicalSize::new(420.0, h.clamp(200.0, 700.0)));
+    }
+}
+
+#[tauri::command]
+fn hide_ask(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("ask") {
+        let _ = w.hide();
+    }
+}
+
+/// Show the popup at the top right of the screen, over other apps, without taking focus.
+fn show_ask(app: &AppHandle) {
+    let Some(w) = app.get_webview_window("ask") else { return };
+    if let Ok(Some(m)) = w.current_monitor().or_else(|_| w.primary_monitor()) {
+        let scale = m.scale_factor();
+        let size = w.outer_size().map(|s| s.width as f64).unwrap_or(420.0 * scale);
+        let x = m.position().x as f64 + m.size().width as f64 - size - 14.0 * scale;
+        let y = m.position().y as f64 + 40.0 * scale;
+        let _ = w.set_position(PhysicalPosition::new(x, y));
+    }
+    let _ = w.eval("window.ask && window.ask.refresh()");
+    let _ = w.show();
+}
+
 #[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0);
@@ -623,6 +652,7 @@ fn runtime(app: AppHandle) {
     std::thread::spawn(move || {
         let lock = util::state().join("daemon.pid");
         let mut keeper: Option<awake::Keeper> = None;
+        let mut shown: std::collections::HashSet<String> = std::collections::HashSet::new();
         let stop = Arc::new(AtomicBool::new(false));
         let mut web_thread: Option<std::thread::JoinHandle<()>> = None;
         let mut prev: HashMap<String, (String, f64)> = HashMap::new();
@@ -650,7 +680,13 @@ fn runtime(app: AppHandle) {
                 }
             }
 
-            let waiting = live.iter().filter(|s| s.status == "needs you").count();
+            // the popup: anything new waiting on you (a prompt, a question, or a reply it's waiting for)
+            let asks: Vec<String> = live.iter().flat_map(|s| s.pending.iter().map(|r| r.id.clone()).chain(s.question.as_ref().map(|q| q.id.clone()))).collect();
+            if asks.iter().any(|id| !shown.contains(id)) {
+                show_ask(&app);
+            }
+            shown.extend(asks);
+            let waiting = live.iter().filter(|s| s.status == "needs you" || s.question.is_some()).count();
             if let Some(tray) = app.tray_by_id("main") {
                 let _ = tray.set_title(if waiting > 0 { Some(waiting.to_string()) } else { None });
             }
@@ -738,7 +774,7 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![call, show_main, hide_quick, quit, ui_log, debug])
+        .invoke_handler(tauri::generate_handler![call, show_main, hide_quick, hide_ask, resize_ask, quit, ui_log, debug])
         .build(tauri::generate_context!())
         .expect("error while building grandaddy");
     app.run(|app, event| {
@@ -767,7 +803,7 @@ pub fn serve_bridge(port: u16, ui_dir: &str) -> Result<(), String> {
             let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
             let cmd = v.get("cmd").and_then(|c| c.as_str()).unwrap_or("").to_string();
             let args = v.get("args").cloned().unwrap_or(json!({}));
-            let res = if ["show_main", "hide_quick", "quit", "ui_log", "debug"].contains(&cmd.as_str()) { Ok(Value::Null) } else { tauri::async_runtime::block_on(dispatch(&cmd, args)) };
+            let res = if ["show_main", "hide_quick", "hide_ask", "resize_ask", "quit", "ui_log", "debug"].contains(&cmd.as_str()) { Ok(Value::Null) } else { tauri::async_runtime::block_on(dispatch(&cmd, args)) };
             let (code, body) = match res {
                 Ok(v) => (200, json!({ "value": v })),
                 Err(e) => (400, json!({ "error": e })),

@@ -44,6 +44,34 @@ pub struct Session {
     /// stopped on a usage limit: when it lifts, and what grandaddy will do then
     pub limit: Option<crate::claude::Limit>,
     pub limit_plan: Option<String>,
+    /// it finished its turn by asking you something and is waiting for your reply
+    pub question: Option<Question>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Question {
+    /// stable for this particular question, so a popup shows once
+    pub id: String,
+    /// its whole last reply (Markdown)
+    pub text: String,
+    pub at: f64,
+}
+
+/// The question an idle session ended its turn with, if it did.
+fn waiting_question(s: &Session) -> Option<Question> {
+    if s.status != "idle" || !FILE_BACKED.contains(&s.tool.as_str()) {
+        return None;
+    }
+    let act = activity(s);
+    let last = act.events.iter().rev().find(|e| matches!(e.k.as_str(), "you" | "text" | "tool" | "limit"))?;
+    if last.k != "text" {
+        return None;
+    }
+    // the reply ends by asking: a question mark on its last line, outside code
+    let tail = last.text.trim_end().trim_end_matches(['*', '_', '`', ')', '"', '\'']);
+    let last_line = tail.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let at = last.ts.unwrap_or(0.0);
+    (tail.ends_with('?') && !last_line.trim_start().starts_with("```") && util::now() - at < 12.0 * 3600.0).then(|| Question { id: format!("{}@{}", s.key, at as i64), text: last.text.clone(), at })
 }
 
 /// Every live session across tools: the Claude Code CLI first, then everything else.
@@ -88,6 +116,7 @@ pub fn collect() -> Vec<Session> {
             managed: None,
             limit: None,
             limit_plan: None,
+            question: None,
             sid: Some(sid),
         });
     }
@@ -122,6 +151,7 @@ pub fn collect() -> Vec<Session> {
             managed: None,
             limit: None,
             limit_plan: None,
+            question: None,
         });
     }
     for s in out.iter_mut() {
@@ -140,6 +170,9 @@ pub fn collect() -> Vec<Session> {
                     s.status = "limit".into();
                     s.limit = Some(l);
                 }
+            }
+            if s.status != "limit" {
+                s.question = waiting_question(s);
             }
         }
     }

@@ -117,7 +117,7 @@
     try {
       const st = await invoke("settings");
       const a = st.awake || {};
-      const text = !a.enabled ? "" : a.agents_only_active ? `Lid closed · agents only · ${a.frozen.length} apps paused` : a.lid_active ? "Awake, even with the lid closed" : a.holding ? "Keeping your Mac awake" : "";
+      const text = !a.enabled ? "" : a.agents_only_active ? `Lid closed · agents only · ${a.frozen.length} apps paused` : a.holding ? `Awake${a.lid_active ? ", even with the lid closed" : ""}: ${(a.reasons || [])[0] || "agents need it"}` : "";
       $("#awake").innerHTML = text ? `${G.moon}<span>${esc(text)}</span>` : "";
     } catch {}
   }

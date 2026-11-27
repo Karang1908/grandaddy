@@ -74,8 +74,11 @@ its replies, the steps in between) with model, folder, branch and context size a
 Long runs of steps fold up so the words stay readable. grandaddy warns you when a session goes
 quiet, seems stuck in a loop, or edits a file another session is also editing.
 
-**Answer from anywhere.** Questions arrive with their options and room to answer in your own
-words. Permission prompts get **Allow** and **Deny**. You can answer in the app, from the menu
+**Answer from anywhere.** When an agent asks a question, wants permission, or ends its turn by
+asking you something, a popup appears at the top right of your screen, over whatever you're
+doing, without taking the keyboard from you. Answer, allow, deny or reply right there, or choose
+**Later**. In the sidebar, every session waiting on you is tinted yellow. Questions arrive with
+their options and room to answer in your own words. Permission prompts get **Allow** and **Deny**. You can answer in the app, from the menu
 bar, in the terminal hub, on your phone, or in the session itself. Whichever answer comes
 first wins.
 
@@ -114,9 +117,10 @@ and can stop itself once the reply contains a phrase you choose, or after a numb
 
 Merging asks first. Nothing ever force-pushes or force-deletes.
 
-**Everything sleeps except the coding.** While any session is working, grandaddy keeps your Mac
-from idle-sleeping. The display still sleeps and locks. Once everything is idle, it lets go.
-You also choose what closing the lid does while sessions work:
+**Everything sleeps except the coding.** While your agents need the Mac (a session working,
+waiting on you, due to continue after a usage limit, or a loop due within the hour), grandaddy
+keeps it from idle-sleeping, and lets go ten minutes after the last of those ends. The display still sleeps and locks. Once everything is idle, it lets go.
+You also choose what closing the lid does while your agents need the Mac:
 
 - **Sleep:** as usual.
 - **Keep everything on:** the whole Mac keeps running.
