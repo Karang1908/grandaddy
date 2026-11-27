@@ -106,9 +106,9 @@ let toastTimer;
 function toast(msg, err = false) {
   const t = $("#toast");
   t.textContent = msg;
-  t.className = "toast glass show" + (err ? " err" : "");
+  t.className = "toast show" + (err ? " err" : "");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => (t.className = "toast glass" + (err ? " err" : "")), err ? 5000 : 2600);
+  toastTimer = setTimeout(() => (t.className = "toast" + (err ? " err" : "")), err ? 5000 : 2600);
 }
 /** Run an action, showing a spinner in the button that started it. */
 async function act(promise, okMsg, btn) {
@@ -246,6 +246,9 @@ async function boot() {
 
 // ---------- sidebar ----------
 function renderSidebar() {
+  const needs = S.sessions.filter((s) => shown(s) === "needs you").length;
+  const working = S.sessions.filter((s) => s.status === "working").length;
+  $("#brand-sub").textContent = needs ? `${needs} waiting on you${working ? ` · ${working} working` : ""}` : working ? `${working} working` : S.sessions.length ? "All quiet" : "No sessions running";
   const q = S.filter.toLowerCase();
   const list = S.sessions.filter((s) => !q || `${s.name} ${s.folder} ${s.tool_label}`.toLowerCase().includes(q));
   let html = "";
@@ -384,8 +387,8 @@ function limitCard(s) {
   return `<div class="limit-card"><span class="hg">${G.hourglass}</span>
     <div class="grow"><div class="t">Hit the ${esc(limitLabel(l.kind))}</div><div class="s">${esc(s.limit_plan || "")}</div>
     <div style="margin-top:9px;display:flex;gap:6px">${on
-      ? `<button class="btn small glass" data-act="continue-skip" data-key="${esc(s.key)}" data-skip="${skipped ? "0" : "1"}">${skipped ? "Continue this one" : "Don't continue this one"}</button>`
-      : `<button class="btn small glass" data-act="goto-settings">Turn on auto-continue</button>`}</div></div>
+      ? `<button class="btn small" data-act="continue-skip" data-key="${esc(s.key)}" data-skip="${skipped ? "0" : "1"}">${skipped ? "Continue this one" : "Don't continue this one"}</button>`
+      : `<button class="btn small" data-act="goto-settings">Turn on auto-continue</button>`}</div></div>
     ${l.resets_at ? `<div class="when">${esc(clock(l.resets_at))}<small>${left > 0 ? `in ${countdown(left)}` : "reset"}</small></div>` : ""}</div>`;
 }
 
@@ -495,10 +498,10 @@ function renderComposer() {
   let hint = "";
   if (d && !d.typable) {
     hint = s.tool === "claude" && s.bg
-      ? "Background session · sending resumes it with your message"
-      : "Sending copies your message and brings its window forward · start agents with grandaddy run to send straight in";
+      ? "Background session: sending resumes it with your message"
+      : "Copies your message and opens its window. Start agents with grandaddy run to send directly.";
   }
-  $("#composer-hint").textContent = hint;
+  $("#composer-hint").innerHTML = `<span>${esc(hint)}</span><span><kbd>⏎</kbd> send · <kbd>⇧⏎</kbd> new line</span>`;
   $("#composer-send").disabled = !ta.value.trim();
 }
 function autosize() {
@@ -547,9 +550,9 @@ function gitPane(s) {
   const r = g.repo;
   const sync = !r.upstream ? "Not on GitHub yet" : r.ahead && r.behind ? `${r.ahead} to push · ${r.behind} to pull` : r.ahead ? `${r.ahead} to push` : r.behind ? `${r.behind} to pull` : "Up to date";
   let h = `<div class="page"><div class="repo-line"><div><div class="branch selectable">${esc(r.branch || "detached")}</div><div class="sync">${esc(sync)}</div></div>
-    <div class="btns"><button class="btn glass" data-act="git-refresh">Refresh</button>
-    <button class="btn glass" data-act="git" data-op="pull" ${r.upstream ? "" : "disabled"}>Pull</button>
-    <button class="btn default" data-act="git" data-op="push">${r.upstream ? "Push" : "Publish Branch"}</button></div></div>`;
+    <div class="btns"><button class="btn" data-act="git-refresh">Refresh</button>
+    <button class="btn" data-act="git" data-op="pull" ${r.upstream ? "" : "disabled"}>Pull</button>
+    <button class="btn ${!r.upstream || r.ahead ? "default" : ""}" data-act="git" data-op="push">${r.upstream ? (r.ahead ? `Push ${r.ahead}` : "Push") : "Publish Branch"}</button></div></div>`;
 
   h += `<h2 class="group-title">Pull Request</h2>`;
   if (g.pr) {
@@ -558,7 +561,7 @@ function gitPane(s) {
     const checks = { passing: ["green", "Checks passing"], failing: ["red", "Checks failing"], pending: ["orange", "Checks running"], none: ["", "No checks"] }[p.checks];
     h += `<div class="group"><div class="cell"><div class="grow"><div class="t selectable">#${p.number} ${esc(p.title)}</div>
       <div class="s" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px"><span class="tag">${esc(p.branch)} → ${esc(p.base)}</span><span class="tag ${checks[0]}">${checks[1]}</span><span class="tag ${review[0]}">${review[1]}</span>${p.draft ? '<span class="tag">Draft</span>' : ""}<span class="tag">+${p.additions} −${p.deletions}</span></div></div>
-      <button class="btn glass" data-act="url" data-url="${esc(p.url)}">View on GitHub</button></div>
+      <button class="btn" data-act="url" data-url="${esc(p.url)}">View on GitHub</button></div>
       <div class="inline-form"><span class="grow muted">Merge into ${esc(p.base)}</span>
       <select ${field("mergeMethod")}><option value="squash" ${!["merge", "rebase"].includes(S.form.mergeMethod) ? "selected" : ""}>Squash and merge</option>
       <option value="merge" ${S.form.mergeMethod === "merge" ? "selected" : ""}>Create a merge commit</option><option value="rebase" ${S.form.mergeMethod === "rebase" ? "selected" : ""}>Rebase and merge</option></select>
@@ -588,9 +591,9 @@ function gitPane(s) {
 
   h += `<h2 class="group-title">Branches</h2><div class="group">` + (g.branches || []).slice(0, 15).map((b) =>
     `<div class="cell ${b.current ? "" : "clickable"}" ${b.current ? "" : `data-act="switch" data-branch="${esc(b.name)}"`}>
-      <span style="width:16px;color:var(--accent)">${b.current ? G.check : ""}</span>
+      <span style="width:16px;color:var(--green)">${b.current ? G.check : ""}</span>
       <div class="grow"><div class="t">${esc(b.name)}</div><div class="s">${esc(b.subject)}</div></div><span class="trail">${ago(now() - b.when)}</span></div>`).join("") +
-    `<div class="inline-form"><input ${field("newBranch")} value="${fval("newBranch")}" placeholder="new-branch-name"><button class="btn glass" data-act="branch">Create Branch</button></div></div>`;
+    `<div class="inline-form"><input ${field("newBranch")} value="${fval("newBranch")}" placeholder="new-branch-name"><button class="btn" data-act="branch">Create Branch</button></div></div>`;
 
   h += `<h2 class="group-title">Recent Commits</h2><div class="group selectable">` + (g.log || []).map((c) =>
     `<div class="cell"><code class="faint">${esc(c.hash)}</code><div class="grow">${esc(c.subject)}<div class="s">${esc(c.author)}</div></div><span class="trail">${ago(now() - c.when)}</span></div>`).join("") + `</div>`;
@@ -682,7 +685,7 @@ function historyPane() {
       <div class="t">${esc((p.prompt || "(no prompt)").slice(0, 140))}</div><div class="s">${esc(p.folder)}</div></div><span class="trail">${esc(p.ago)}</span></div>`;
     if (open) {
       row += `<div class="cell" style="display:block">${S.histAct === null ? '<div class="skel skel-line" style="width:70%"></div><div class="skel skel-line" style="width:50%"></div>' : transcript(S.histAct.slice(-40), "h:" + p.sid)}
-        <div class="actions" style="padding:10px 0 4px"><button class="btn glass" data-act="hist-term" data-sid="${esc(p.sid)}">Open in Terminal</button>
+        <div class="actions" style="padding:10px 0 4px"><button class="btn" data-act="hist-term" data-sid="${esc(p.sid)}">Open in Terminal</button>
         <button class="btn default" data-act="hist-resume" data-sid="${esc(p.sid)}">Resume in Background</button></div></div>`;
     }
     return row;
@@ -775,13 +778,13 @@ function settingsPane() {
   if (mode === "agents") {
     h += `<div class="cell" style="display:block;padding-bottom:8px"><div class="t">Keep running</div><div class="s">Besides the apps your sessions run in, these keep running with the lid closed. Everything else pauses.</div></div>
       <div class="chips">${(st.keep || []).map((k, i) => `<span class="chip">${esc(k)}<button data-act="keep-rm" data-i="${i}" title="Remove">${G.x}</button></span>`).join("")}</div>
-      <div class="inline-form"><input ${field("keepAdd")} value="${fval("keepAdd")}" placeholder="App name, e.g. Spotify"><button class="btn glass" data-act="keep-add">Add</button></div>`;
+      <div class="inline-form"><input ${field("keepAdd")} value="${fval("keepAdd")}" placeholder="App name, e.g. Spotify"><button class="btn" data-act="keep-add">Add</button></div>`;
   }
   h += `</div>`;
 
   h += `<h2 class="group-title">Usage Limits</h2><div class="group">
     <div class="cell"><div class="grow"><div class="t">Continue after a usage limit resets</div><div class="s">When a session stops on its 5-hour or weekly limit, Grandaddy sends it a message as soon as the limit lifts, so the work carries on without you.</div></div>${sw('data-act="auto-continue"', ac.enabled)}</div>
-    <div class="inline-form"><span class="muted" style="width:70px">Message</span><input ${field("acMessage")} value="${fval("acMessage", ac.message)}" placeholder="continue"><button class="btn glass" data-act="ac-save">Save</button></div></div>
+    <div class="inline-form"><span class="muted" style="width:70px">Message</span><input ${field("acMessage")} value="${fval("acMessage", ac.message)}" placeholder="continue"><button class="btn" data-act="ac-save">Save</button></div></div>
     <p class="footnote">It types into sessions started with grandaddy run, or running in iTerm, Terminal or tmux, and resumes background Claude sessions. For any other session you get a notification when its limit resets.</p>`;
 
   h += `<h2 class="group-title">Approvals</h2><div class="group">
@@ -790,7 +793,7 @@ function settingsPane() {
   h += `<h2 class="group-title">Phone</h2><div class="group">`;
   if (st.phone) {
     h += `<div class="cell"><div class="grow"><div class="t">Notifications with ntfy</div><div class="s selectable">Subscribed to <code>${esc(st.phone.topic)}</code> on ${esc(st.phone.server)}. The topic name works like a password.</div></div>
-      <button class="btn glass" data-act="phone-test">Send Test</button><button class="btn glass" data-act="phone-off">Turn Off</button></div>`;
+      <button class="btn" data-act="phone-test">Send Test</button><button class="btn" data-act="phone-off">Turn Off</button></div>`;
   } else {
     h += `<div class="cell"><div class="grow"><div class="t">Notifications with ntfy</div><div class="s">Get permission prompts and questions on your phone, and answer them there. Install the free ntfy app first.</div></div>
       <input ${field("ntfy")} value="${fval("ntfy")}" placeholder="https://ntfy.sh" style="width:150px" spellcheck="false"><button class="btn default" data-act="phone-setup">Set Up</button></div>`;
@@ -804,7 +807,7 @@ function settingsPane() {
   h += `<h2 class="group-title">General</h2><div class="group">
     <div class="cell"><div class="grow"><div class="t">Open at login</div><div class="s">Starts in the menu bar, so loops, approvals and staying awake keep working.</div></div>${sw('data-act="login"', st.login)}</div>
     <div class="cell"><div class="grow"><div class="t">Command-line tool</div><div class="s">${st.cli.linked ? "grandaddy is on your PATH." : st.cli.bundled ? "Link the bundled grandaddy command into ~/.local/bin." : "Install with cargo install --path crates/grandaddy."}</div></div>
-      ${st.cli.bundled && !st.cli.linked ? `<button class="btn glass" data-act="link-cli">Link</button>` : st.cli.linked ? '<span class="tag green">Linked</span>' : ""}</div></div>`;
+      ${st.cli.bundled && !st.cli.linked ? `<button class="btn" data-act="link-cli">Link</button>` : st.cli.linked ? '<span class="tag green">Linked</span>' : ""}</div></div>`;
   if (st.log && st.log.length) h += `<h2 class="group-title">Recent Decisions</h2><div class="group"><div class="cell selectable" style="display:block"><code style="white-space:pre-wrap;display:block;line-height:1.7">${esc(st.log.slice(-25).reverse().join("\n"))}</code></div></div>`;
   return h + `<p class="footnote" style="text-align:center;margin-top:26px">Grandaddy ${esc(st.version)}</p></div>`;
 }

@@ -17,19 +17,13 @@
         "height": 800,
         "minWidth": 920,
         "minHeight": 580,
-        "transparent": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "trafficLightPosition": {
           "x": 20,
           "y": 24
         },
-        "windowEffects": {
-          "effects": [
-            "sidebar"
-          ],
-          "state": "followsWindowActiveState"
-        }
+        "backgroundColor": "#fbf8f3"
       },
       {
         "label": "quick",
@@ -43,14 +37,7 @@
         "skipTaskbar": true,
         "alwaysOnTop": true,
         "transparent": true,
-        "shadow": true,
-        "windowEffects": {
-          "effects": [
-            "popover"
-          ],
-          "state": "active",
-          "radius": 12
-        }
+        "shadow": true
       },
       {
         "label": "ask",
@@ -65,14 +52,7 @@
         "skipTaskbar": true,
         "alwaysOnTop": true,
         "transparent": true,
-        "shadow": true,
-        "windowEffects": {
-          "effects": [
-            "popover"
-          ],
-          "state": "active",
-          "radius": 20
-        }
+        "shadow": true
       }
     ],
     "security": {
